@@ -70,14 +70,39 @@ export default function StudentDashboard() {
         checkAuth();
     }, [router]);
 
-    const handleJoinSession = (e: React.FormEvent) => {
+    const handleJoinSession = async (e: React.FormEvent) => {
         e.preventDefault();
         if (roomCode.length !== 6) {
             alert('Please enter a valid 6-digit room code');
             return;
         }
-        // Session joining logic will be wired in Phase 5
-        alert(`Joining session room: ${roomCode}`);
+        const { data: sessionData, error } = await supabase
+            .from('quiz_sessions')
+            .select('id, quiz_id, status, quizzes(type, available_from, available_until)')
+            .eq('room_code', roomCode)
+            .single();
+
+        if (error || !sessionData) {
+            alert('Invalid or expired quiz code.');
+            return;
+        }
+
+        const quiz = Array.isArray(sessionData.quizzes) ? sessionData.quizzes[0] : sessionData.quizzes;
+        if (quiz?.type === 'static') {
+            const now = Date.now();
+            if (quiz.available_from && now < new Date(quiz.available_from).getTime()) {
+                alert(`This quiz opens at ${new Date(quiz.available_from).toLocaleString()}.`);
+                return;
+            }
+            if (quiz.available_until && now >= new Date(quiz.available_until).getTime()) {
+                alert('This quiz is closed and can no longer be attempted.');
+                return;
+            }
+            router.push(`/quiz/static/${sessionData.quiz_id}?session=${sessionData.id}`);
+            return;
+        }
+
+        router.push(`/quiz/live/student/${roomCode}`);
     };
 
     const handleSignOut = async () => {
@@ -121,7 +146,7 @@ export default function StudentDashboard() {
                     <div className="inline-flex p-4 bg-indigo-50 text-indigo-600 rounded-full mb-4">
                         <Hash className="w-8 h-8" />
                     </div>
-                    <h2 className="text-2xl font-bold text-gray-900 mb-2">Join a Live Quiz Session</h2>
+                    <h2 className="text-2xl font-bold text-gray-900 mb-2">Join Your Quiz</h2>
                     <p className="text-gray-500 text-sm mb-6">
                         Enter the 6-digit room code displayed on your teacher's projector screen.
                     </p>
@@ -140,20 +165,21 @@ export default function StudentDashboard() {
                             className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl flex items-center justify-center transition"
                         >
                             <Play className="w-5 h-5 mr-2" />
-                            Enter Game Room
+                            Enter Quiz Room
                         </button>
                     </form>
                 </div>
 
                 {/* Available Static Quizzes */}
                 <div className="mt-12">
-                    <h3 className="text-xl font-bold text-gray-900 mb-6">Available Static Quizzes</h3>
+                    <h3 className="text-xl font-bold text-gray-900 mb-6">Quiz History</h3>
                     {staticQuizzes.length === 0 ? (
                         <p className="text-gray-500 text-center py-8">No static quizzes available right now.</p>
                     ) : (
                         <div className="grid gap-4">
                             {staticQuizzes.map((quiz) => {
                                 const isCompleted = completedQuizIds.has(quiz.id);
+                                const isClosed = quiz.available_until && Date.now() >= new Date(quiz.available_until).getTime();
                                 return (
                                     <div key={quiz.id} className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex justify-between items-center">
                                         <div>
@@ -164,8 +190,15 @@ export default function StudentDashboard() {
                                         </div>
                                         <div>
                                             {isCompleted ? (
-                                                <span className="px-4 py-2 bg-green-100 text-green-700 font-semibold rounded-lg text-sm">
-                                                    Completed
+                                                <button
+                                                    onClick={() => router.push(`/quiz/static/${quiz.id}?review=1`)}
+                                                    className="px-4 py-2 bg-green-100 text-green-700 hover:bg-green-200 font-semibold rounded-lg text-sm"
+                                                >
+                                                    Review Quiz
+                                                </button>
+                                            ) : isClosed ? (
+                                                <span className="px-4 py-2 bg-gray-100 text-gray-600 font-semibold rounded-lg text-sm">
+                                                    Closed
                                                 </span>
                                             ) : (
                                                 <button

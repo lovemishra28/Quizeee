@@ -17,9 +17,10 @@ interface SubmitStaticQuizParams {
     quizId: string;
     userId: string;
     answers: Record<string, number>;
+    sessionId?: string;
 }
 
-export async function submitStaticQuiz({ quizId, userId, answers }: SubmitStaticQuizParams) {
+export async function submitStaticQuiz({ quizId, userId, answers, sessionId }: SubmitStaticQuizParams) {
     try {
         if (!quizId || !userId) {
             throw new Error('Missing required quiz or user information');
@@ -36,20 +37,34 @@ export async function submitStaticQuiz({ quizId, userId, answers }: SubmitStatic
             throw new Error(questionsError?.message || 'Failed to fetch questions for grading');
         }
 
-        // 2. Create the completed quiz session using service-role permissions
-        const { data: sessionData, error: sessionError } = await supabaseAdmin
-            .from('quiz_sessions')
-            .insert({
-                quiz_id: quizId,
-                status: 'completed',
-                room_code: Math.floor(100000 + Math.random() * 900000).toString(),
-            })
-            .select()
-            .single();
-
-        if (sessionError || !sessionData) {
-            throw new Error(sessionError?.message || 'Failed to create quiz session');
+        // Reuse the teacher's access-code session when a static quiz was joined by code.
+        let sessionData;
+        if (sessionId) {
+            const { data, error } = await supabaseAdmin
+                .from('quiz_sessions')
+                .select('id, quiz_id')
+                .eq('id', sessionId)
+                .eq('quiz_id', quizId)
+                .single();
+            if (error || !data) throw new Error('Invalid static quiz session');
+            sessionData = data;
+        } else {
+            const { data, error } = await supabaseAdmin
+                .from('quiz_sessions')
+                .insert({
+                    quiz_id: quizId,
+                    status: 'completed',
+                    room_code: Math.floor(100000 + Math.random() * 900000).toString(),
+                })
+                .select()
+                .single();
+            sessionData = data;
+            if (error || !sessionData) {
+                throw new Error(error?.message || 'Failed to create quiz session');
+            }
         }
+
+        if (!sessionData) throw new Error('Failed to create quiz session');
 
         // 3. Server-side grading of student answers
         let correctCount = 0;

@@ -1,6 +1,7 @@
 'use client';
 
 import { use, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
 import { Clock, BookOpen, Play } from 'lucide-react';
@@ -9,6 +10,9 @@ import { submitStaticQuiz } from '@/actions/submitStaticQuiz';
 export default function StaticQuizPage({ params }: { params: Promise<{ quizId: string }> }) {
     const { quizId } = use(params);
     const router = useRouter();
+    const searchParams = useSearchParams();
+    const sessionId = searchParams.get('session') || undefined;
+    const isReviewMode = searchParams.get('review') === '1';
 
     const [loading, setLoading] = useState(true);
     const [quiz, setQuiz] = useState<any>(null);
@@ -20,6 +24,7 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
     const [userId, setUserId] = useState<string>('');
     const [finalScore, setFinalScore] = useState<number>(0);
     const [userRole, setUserRole] = useState<string>('');
+    const [reviewSubmissions, setReviewSubmissions] = useState<Record<string, { selectedIndex: number; isCorrect: boolean }>>({});
 
     // Timer Countdown Logic
     useEffect(() => {
@@ -53,6 +58,7 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
                 quizId,
                 userId,
                 answers,
+                sessionId,
             });
 
             if (!result.success) {
@@ -109,6 +115,17 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
                 return;
             }
 
+            const now = Date.now();
+            const startsAt = quizData.available_from ? new Date(quizData.available_from).getTime() : null;
+            const endsAt = quizData.available_until ? new Date(quizData.available_until).getTime() : null;
+            if (!isReviewMode && ((startsAt !== null && now < startsAt) || (endsAt !== null && now >= endsAt))) {
+                alert(endsAt !== null && now >= endsAt
+                    ? 'This quiz is closed and can no longer be attempted.'
+                    : `This quiz opens at ${new Date(startsAt as number).toLocaleString()}.`);
+                router.push('/dashboard/student');
+                return;
+            }
+
             // 2. Fetch the associated questions, ordered correctly
             const { data: questionsData, error: questionsError } = await supabase
                 .from('questions')
@@ -123,16 +140,100 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
             }
 
             setQuiz(quizData);
+
+            if (isReviewMode && session?.user) {
+                const { data: submissions, error: submissionsError } = await supabase
+                    .from('submissions')
+                    .select('question_id, selected_option_index, is_correct')
+                    .eq('student_id', session.user.id)
+                    .in('question_id', (questionsData || []).map((question) => question.id));
+
+                if (submissionsError) {
+                    console.error('Failed to load quiz review', submissionsError);
+                } else {
+                    setReviewSubmissions(Object.fromEntries(
+                        (submissions || []).map((submission) => [
+                            submission.question_id,
+                            {
+                                selectedIndex: submission.selected_option_index,
+                                isCorrect: submission.is_correct,
+                            },
+                        ])
+                    ));
+                }
+            }
+
             setLoading(false);
         }
 
         fetchQuizData();
-    }, [quizId, router]);
+    }, [quizId, router, isReviewMode]);
 
     if (loading) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-gray-50">
                 <p className="text-gray-500 font-medium animate-pulse">Loading quiz materials...</p>
+            </div>
+        );
+    }
+
+    if (isReviewMode) {
+        const correctCount = Object.values(reviewSubmissions).filter((submission) => submission.isCorrect).length;
+
+        return (
+            <div className="min-h-screen bg-gray-50 p-6">
+                <main className="max-w-4xl mx-auto">
+                    <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
+                        <div>
+                            <p className="text-indigo-600 font-semibold">Quiz review</p>
+                            <h1 className="text-3xl font-black text-gray-900">{quiz.title}</h1>
+                        </div>
+                        <div className="bg-white border border-gray-200 rounded-xl px-5 py-3 font-bold text-gray-700">
+                            Score: {correctCount} / {questions.length}
+                        </div>
+                    </div>
+
+                    <div className="space-y-6">
+                        {questions.map((question: any, questionIndex: number) => {
+                            const submission = reviewSubmissions[question.id];
+                            return (
+                                <section key={question.id} className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
+                                    <p className="text-sm font-semibold text-gray-500 mb-2">Question {questionIndex + 1}</p>
+                                    <h2 className="text-xl font-bold text-gray-900 mb-5">{question.question_text}</h2>
+                                    <div className="grid gap-3 sm:grid-cols-2">
+                                        {question.options.map((option: string, optionIndex: number) => {
+                                            const isCorrectOption = optionIndex === question.correct_option_index;
+                                            const isSelectedOption = optionIndex === submission?.selectedIndex;
+                                            const optionClass = isCorrectOption
+                                                ? 'border-green-500 bg-green-50 text-green-900'
+                                                : isSelectedOption
+                                                    ? 'border-red-500 bg-red-50 text-red-900'
+                                                    : 'border-gray-200 bg-gray-50 text-gray-700';
+
+                                            return (
+                                                <div key={optionIndex} className={`rounded-xl border-2 p-4 ${optionClass}`}>
+                                                    <span className="font-bold mr-2">{String.fromCharCode(65 + optionIndex)}.</span>
+                                                    {option}
+                                                    {isCorrectOption && <p className="mt-2 text-sm font-bold text-green-700">Correct answer</p>}
+                                                    {isSelectedOption && !isCorrectOption && <p className="mt-2 text-sm font-bold text-red-700">Your response was wrong</p>}
+                                                    {isSelectedOption && isCorrectOption && <p className="mt-2 text-sm font-bold text-green-700">Your response was correct</p>}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                    {!submission && <p className="mt-4 text-sm font-semibold text-red-600">No response submitted</p>}
+                                </section>
+                            );
+                        })}
+                    </div>
+
+                    <button
+                        onClick={() => router.push('/dashboard/student')}
+                        className="mt-8 px-6 py-3 bg-gray-900 hover:bg-gray-800 text-white font-semibold rounded-xl"
+                    >
+                        Return to Dashboard
+                    </button>
+                </main>
             </div>
         );
     }

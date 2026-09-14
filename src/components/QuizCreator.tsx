@@ -10,12 +10,22 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
     const [title, setTitle] = useState('');
     const [questionCount, setQuestionCount] = useState(5);
     const [type, setType] = useState('static');
+    const [availableFrom, setAvailableFrom] = useState('');
+    const [availableUntil, setAvailableUntil] = useState('');
     const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState('');
 
     const handleUpload = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!file || !title) return;
+        if (type === 'static' && (!availableFrom || !availableUntil)) {
+            setStatus('Set both the static quiz start and end times.');
+            return;
+        }
+        if (type === 'static' && new Date(availableUntil) <= new Date(availableFrom)) {
+            setStatus('The quiz end time must be after the start time.');
+            return;
+        }
 
         setLoading(true);
         setStatus('Analyzing document and generating AI questions...');
@@ -39,6 +49,8 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                     teacher_id: teacherId,
                     title: title,
                     type: type, 
+                    available_from: type === 'static' ? new Date(availableFrom).toISOString() : null,
+                    available_until: type === 'static' ? new Date(availableUntil).toISOString() : null,
                 })
                 .select()
                 .single();
@@ -68,6 +80,8 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                 setStatus('');
                 setFile(null);
                 setTitle('');
+                setAvailableFrom('');
+                setAvailableUntil('');
                 if (onComplete) onComplete();
             }, 2000);
 
@@ -107,6 +121,31 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                         </select>
                     </div>
                 </div>
+
+                {type === 'static' && (
+                    <div className="grid gap-4 sm:grid-cols-2 rounded-lg bg-indigo-50 p-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Available from</label>
+                            <input
+                                type="datetime-local"
+                                required
+                                value={availableFrom}
+                                onChange={(e) => setAvailableFrom(e.target.value)}
+                                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Available until</label>
+                            <input
+                                type="datetime-local"
+                                required
+                                value={availableUntil}
+                                onChange={(e) => setAvailableUntil(e.target.value)}
+                                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                            />
+                        </div>
+                    </div>
+                )}
 
                 <div className="flex gap-4">
                     <div className="flex-1">
