@@ -1,5 +1,5 @@
 'use client';
-
+import QuizCreator from '@/components/QuizCreator';
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
@@ -8,6 +8,7 @@ import { Plus, BookOpen, BarChart2, LogOut } from 'lucide-react';
 export default function TeacherDashboard() {
     const [loading, setLoading] = useState(true);
     const [userName, setUserName] = useState('');
+    const [userId, setUserId] = useState('');
     const router = useRouter();
 
     useEffect(() => {
@@ -31,6 +32,7 @@ export default function TeacherDashboard() {
             }
 
             setUserName(profile.full_name);
+            setUserId(session.user.id);
             setLoading(false);
         }
 
@@ -79,37 +81,10 @@ export default function TeacherDashboard() {
                         <h1 className="text-3xl font-bold text-gray-900">Welcome back, {userName}!</h1>
                         <p className="text-gray-500 mt-1">Manage study materials, quizzes, and real-time sessions.</p>
                     </div>
-                    <button
-                        onClick={() => alert('Quiz Creation Pipeline will be built in Phase 3')}
-                        className="flex items-center px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg shadow-sm transition"
-                    >
-                        <Plus className="w-5 h-5 mr-2" />
-                        Create New Quiz
-                    </button>
                 </div>
 
-                {/* Dashboard Grid Placeholder */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex items-center space-x-4">
-                        <div className="p-3 bg-indigo-50 text-indigo-600 rounded-lg">
-                            <BookOpen className="w-6 h-6" />
-                        </div>
-                        <div>
-                            <p className="text-sm font-medium text-gray-500">Total Quizzes</p>
-                            <h3 className="text-2xl font-bold text-gray-900">0</h3>
-                        </div>
-                    </div>
-
-                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex items-center space-x-4">
-                        <div className="p-3 bg-green-50 text-green-600 rounded-lg">
-                            <BarChart2 className="w-6 h-6" />
-                        </div>
-                        <div>
-                            <p className="text-sm font-medium text-gray-500">Active Sessions</p>
-                            <h3 className="text-2xl font-bold text-gray-900">0</h3>
-                        </div>
-                    </div>
-                </div>
+                {/* Quiz Creator Component */}
+                <QuizCreator teacherId={userId} />
             </main>
         </div>
     );

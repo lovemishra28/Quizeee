@@ -19,9 +19,9 @@ export async function processStudyMaterial(formData: FormData) {
         const textResult = await parser.getText();
         const extractedText = textResult.text;
 
-        // 2. Initialize the Gemini 1.5 Flash model
+        // 2. Initialize the Gemini model
         const model = genAI.getGenerativeModel({
-            model: 'gemini-1.5-flash',
+            model: 'gemini-3.6-flash',
             // Force the AI to output valid JSON instead of conversational text
             generationConfig: { responseMimeType: 'application/json' }
         });
