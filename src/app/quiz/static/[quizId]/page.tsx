@@ -12,10 +12,12 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
     const [loading, setLoading] = useState(true);
     const [quiz, setQuiz] = useState<any>(null);
     const [questions, setQuestions] = useState<any[]>([]);
-    const [quizState, setQuizState] = useState<'intro' | 'active' | 'completed'>('intro');
+    const [quizState, setQuizState] = useState<'intro' | 'active' | 'completed' | 'submitting'>('intro');
     const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
     const [answers, setAnswers] = useState<Record<string, number>>({});
     const [timeLeft, setTimeLeft] = useState<number>(0);
+    const [userId, setUserId] = useState<string>('');
+    const [finalScore, setFinalScore] = useState<number>(0);
 
     // Timer Countdown Logic
     useEffect(() => {
@@ -41,10 +43,59 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
         setQuizState('active');
     };
 
-    const handleCompleteQuiz = () => {
-        setQuizState('completed');
-        // We will build the database submission logic in Step 3
-        alert('Quiz completed! Submitting answers...');
+    const handleCompleteQuiz = async () => {
+        setQuizState('submitting');
+
+        try {
+            // 1. Create a "session" record to group this static attempt
+            const { data: sessionData, error: sessionError } = await supabase
+                .from('quiz_sessions')
+                .insert({
+                    quiz_id: quizId,
+                    status: 'completed',
+                    // Generate a random mock room code to satisfy the unique constraint for static sessions
+                    room_code: Math.floor(100000 + Math.random() * 900000).toString(),
+                })
+                .select()
+                .single();
+
+            if (sessionError) throw sessionError;
+
+            // 2. Grade the answers and prepare the payload
+            let correctCount = 0;
+            const submissionsToInsert = questions.map((q) => {
+                const selectedIndex = answers[q.id] ?? -1; // -1 if skipped
+                const isCorrect = selectedIndex === q.correct_option_index;
+
+                if (isCorrect) correctCount++;
+
+                return {
+                    session_id: sessionData.id,
+                    student_id: userId,
+                    question_id: q.id,
+                    selected_option_index: selectedIndex,
+                    is_correct: isCorrect,
+                    score_awarded: isCorrect ? 10 : 0,
+                    response_time_ms: 0, // Not tracked in static mode
+                };
+            });
+
+            // 3. Bulk insert all answers into the submissions table
+            const { error: subError } = await supabase
+                .from('submissions')
+                .insert(submissionsToInsert);
+
+            if (subError) throw subError;
+
+            // 4. Update the UI state to show the results
+            setFinalScore(correctCount);
+            setQuizState('completed');
+
+        } catch (error: any) {
+            console.error('Error submitting quiz:', error);
+            alert('Failed to submit quiz. Please try again.');
+            setQuizState('active'); // Revert so they can try clicking submit again
+        }
     };
 
     const formatTime = (seconds: number) => {
@@ -55,6 +106,15 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
 
     useEffect(() => {
         async function fetchQuizData() {
+            // Fetch the current user ID
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session) {
+                setUserId(session.user.id);
+            } else {
+                router.push('/auth');
+                return;
+            }
+
             // 1. Fetch the quiz metadata
             const { data: quizData, error: quizError } = await supabase
                 .from('quizzes')
@@ -209,5 +269,43 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
         );
     }
 
-    return <div>Quiz Completed</div>;
+    if (quizState === 'submitting') {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-50">
+                <p className="text-indigo-600 font-medium animate-pulse">Grading your answers and submitting...</p>
+            </div>
+        );
+    }
+
+    if (quizState === 'completed') {
+        const percentage = Math.round((finalScore / questions.length) * 100);
+
+        return (
+            <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+                <div className="max-w-md w-full bg-white p-8 rounded-2xl border border-gray-200 shadow-sm text-center">
+                    <div className="inline-flex p-4 bg-green-50 text-green-600 rounded-full mb-4">
+                        <BookOpen className="w-8 h-8" />
+                    </div>
+                    <h2 className="text-3xl font-bold text-gray-900 mb-2">Quiz Complete!</h2>
+                    <p className="text-gray-500 mb-8">Your responses have been successfully recorded.</p>
+
+                    <div className="bg-gray-50 rounded-xl p-6 mb-8 border border-gray-100">
+                        <div className="text-5xl font-black text-indigo-600 mb-2">{percentage}%</div>
+                        <p className="text-gray-600 font-medium">
+                            You scored {finalScore} out of {questions.length} correct
+                        </p>
+                    </div>
+
+                    <button
+                        onClick={() => router.push('/dashboard/student')}
+                        className="w-full py-3 bg-gray-900 hover:bg-gray-800 text-white font-semibold rounded-xl transition"
+                    >
+                        Return to Dashboard
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    return null;
 }
