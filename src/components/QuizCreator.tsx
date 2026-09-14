@@ -9,6 +9,7 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
     const [file, setFile] = useState<File | null>(null);
     const [title, setTitle] = useState('');
     const [questionCount, setQuestionCount] = useState(5);
+    const [type, setType] = useState('static');
     const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState('');
 
@@ -37,7 +38,7 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                 .insert({
                     teacher_id: teacherId,
                     title: title,
-                    type: 'competitive', // Defaulting to competitive for now
+                    type: type, 
                 })
                 .select()
                 .single();
@@ -82,16 +83,29 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
         <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
             <h3 className="text-xl font-bold text-gray-900 mb-4">Generate AI Quiz</h3>
             <form onSubmit={handleUpload} className="space-y-4">
-                <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Quiz Title</label>
-                    <input
-                        type="text"
-                        required
-                        value={title}
-                        onChange={(e) => setTitle(e.target.value)}
-                        placeholder="e.g., Biology Chapter 4: Cell Division"
-                        className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-                    />
+                <div className="flex gap-4">
+                    <div className="flex-1">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Quiz Title</label>
+                        <input
+                            type="text"
+                            required
+                            value={title}
+                            onChange={(e) => setTitle(e.target.value)}
+                            placeholder="e.g., Biology Chapter 4: Cell Division"
+                            className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                        />
+                    </div>
+                    <div className="w-48">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Quiz Type</label>
+                        <select
+                            value={type}
+                            onChange={(e) => setType(e.target.value)}
+                            className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                        >
+                            <option value="static">Static (Self-paced)</option>
+                            <option value="competitive">Competitive (Live)</option>
+                        </select>
+                    </div>
                 </div>
 
                 <div className="flex gap-4">

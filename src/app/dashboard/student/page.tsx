@@ -8,7 +8,10 @@ import { LogOut, Play, Hash } from 'lucide-react';
 export default function StudentDashboard() {
     const [loading, setLoading] = useState(true);
     const [userName, setUserName] = useState('');
+    const [userId, setUserId] = useState('');
     const [roomCode, setRoomCode] = useState('');
+    const [staticQuizzes, setStaticQuizzes] = useState<any[]>([]);
+    const [completedQuizIds, setCompletedQuizIds] = useState<Set<string>>(new Set());
     const router = useRouter();
 
     useEffect(() => {
@@ -32,6 +35,35 @@ export default function StudentDashboard() {
             }
 
             setUserName(profile.full_name);
+            setUserId(session.user.id);
+
+            // Fetch static quizzes
+            const { data: quizzesData } = await supabase
+                .from('quizzes')
+                .select('*')
+                .eq('type', 'static')
+                .order('created_at', { ascending: false });
+
+            if (quizzesData) {
+                setStaticQuizzes(quizzesData);
+            }
+
+            // Fetch user's completed submissions to find completed quizzes
+            const { data: submissionsData } = await supabase
+                .from('submissions')
+                .select('quiz_sessions(quiz_id)')
+                .eq('student_id', session.user.id);
+            
+            if (submissionsData) {
+                const completed = new Set<string>();
+                submissionsData.forEach((sub: any) => {
+                    if (sub.quiz_sessions && sub.quiz_sessions.quiz_id) {
+                        completed.add(sub.quiz_sessions.quiz_id);
+                    }
+                });
+                setCompletedQuizIds(completed);
+            }
+
             setLoading(false);
         }
 
@@ -111,6 +143,44 @@ export default function StudentDashboard() {
                             Enter Game Room
                         </button>
                     </form>
+                </div>
+
+                {/* Available Static Quizzes */}
+                <div className="mt-12">
+                    <h3 className="text-xl font-bold text-gray-900 mb-6">Available Static Quizzes</h3>
+                    {staticQuizzes.length === 0 ? (
+                        <p className="text-gray-500 text-center py-8">No static quizzes available right now.</p>
+                    ) : (
+                        <div className="grid gap-4">
+                            {staticQuizzes.map((quiz) => {
+                                const isCompleted = completedQuizIds.has(quiz.id);
+                                return (
+                                    <div key={quiz.id} className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex justify-between items-center">
+                                        <div>
+                                            <h4 className="text-lg font-bold text-gray-900">{quiz.title}</h4>
+                                            <p className="text-sm text-gray-500 mt-1">
+                                                {quiz.total_duration_minutes || 45} mins • Self-paced
+                                            </p>
+                                        </div>
+                                        <div>
+                                            {isCompleted ? (
+                                                <span className="px-4 py-2 bg-green-100 text-green-700 font-semibold rounded-lg text-sm">
+                                                    Completed
+                                                </span>
+                                            ) : (
+                                                <button
+                                                    onClick={() => router.push(`/quiz/static/${quiz.id}`)}
+                                                    className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition text-sm"
+                                                >
+                                                    Take Quiz
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
                 </div>
             </main>
         </div>

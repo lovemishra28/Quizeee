@@ -4,6 +4,7 @@ import { use, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
 import { Clock, BookOpen, Play } from 'lucide-react';
+import { submitStaticQuiz } from '@/actions/submitStaticQuiz';
 
 export default function StaticQuizPage({ params }: { params: Promise<{ quizId: string }> }) {
     const { quizId } = use(params);
@@ -18,6 +19,7 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
     const [timeLeft, setTimeLeft] = useState<number>(0);
     const [userId, setUserId] = useState<string>('');
     const [finalScore, setFinalScore] = useState<number>(0);
+    const [userRole, setUserRole] = useState<string>('');
 
     // Timer Countdown Logic
     useEffect(() => {
@@ -47,53 +49,22 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
         setQuizState('submitting');
 
         try {
-            // 1. Create a "session" record to group this static attempt
-            const { data: sessionData, error: sessionError } = await supabase
-                .from('quiz_sessions')
-                .insert({
-                    quiz_id: quizId,
-                    status: 'completed',
-                    // Generate a random mock room code to satisfy the unique constraint for static sessions
-                    room_code: Math.floor(100000 + Math.random() * 900000).toString(),
-                })
-                .select()
-                .single();
-
-            if (sessionError) throw sessionError;
-
-            // 2. Grade the answers and prepare the payload
-            let correctCount = 0;
-            const submissionsToInsert = questions.map((q) => {
-                const selectedIndex = answers[q.id] ?? -1; // -1 if skipped
-                const isCorrect = selectedIndex === q.correct_option_index;
-
-                if (isCorrect) correctCount++;
-
-                return {
-                    session_id: sessionData.id,
-                    student_id: userId,
-                    question_id: q.id,
-                    selected_option_index: selectedIndex,
-                    is_correct: isCorrect,
-                    score_awarded: isCorrect ? 10 : 0,
-                    response_time_ms: 0, // Not tracked in static mode
-                };
+            const result = await submitStaticQuiz({
+                quizId,
+                userId,
+                answers,
             });
 
-            // 3. Bulk insert all answers into the submissions table
-            const { error: subError } = await supabase
-                .from('submissions')
-                .insert(submissionsToInsert);
+            if (!result.success) {
+                throw new Error(result.error);
+            }
 
-            if (subError) throw subError;
-
-            // 4. Update the UI state to show the results
-            setFinalScore(correctCount);
+            setFinalScore(result.score ?? 0);
             setQuizState('completed');
 
         } catch (error: any) {
             console.error('Error submitting quiz:', error);
-            alert('Failed to submit quiz. Please try again.');
+            alert(`Failed to submit quiz: ${error.message || 'Please try again.'}`);
             setQuizState('active'); // Revert so they can try clicking submit again
         }
     };
@@ -106,10 +77,20 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
 
     useEffect(() => {
         async function fetchQuizData() {
-            // Fetch the current user ID
             const { data: { session } } = await supabase.auth.getSession();
             if (session) {
                 setUserId(session.user.id);
+
+                // Fetch user role
+                const { data: profile } = await supabase
+                    .from('profiles')
+                    .select('role')
+                    .eq('id', session.user.id)
+                    .single();
+                
+                if (profile) {
+                    setUserRole(profile.role);
+                }
             } else {
                 router.push('/auth');
                 return;
@@ -158,6 +139,26 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
 
     // Render the Intro Screen
     if (quizState === 'intro') {
+        if (userRole === 'teacher') {
+            return (
+                <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+                    <div className="max-w-md w-full bg-white p-8 rounded-2xl border border-gray-200 shadow-sm text-center">
+                        <div className="inline-flex p-4 bg-red-50 text-red-600 rounded-full mb-4">
+                            <BookOpen className="w-8 h-8" />
+                        </div>
+                        <h1 className="text-2xl font-bold text-gray-900 mb-2">Teacher View</h1>
+                        <p className="text-gray-500 mb-6">As a teacher, you cannot take the quiz. You can view the quiz details or results from your dashboard.</p>
+                        <button
+                            onClick={() => router.push('/dashboard/teacher')}
+                            className="w-full px-8 py-3 bg-gray-900 hover:bg-gray-800 text-white font-semibold rounded-xl inline-flex items-center justify-center transition"
+                        >
+                            Return to Dashboard
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
         return (
             <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
                 <div className="max-w-2xl w-full bg-white p-8 rounded-2xl border border-gray-200 shadow-sm text-center">
