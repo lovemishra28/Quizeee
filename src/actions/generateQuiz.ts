@@ -1,7 +1,7 @@
 'use server';
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import pdfParse from 'pdf-parse';
+import { PDFParse } from 'pdf-parse';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
@@ -15,8 +15,9 @@ export async function processStudyMaterial(formData: FormData) {
         // 1. Extract text from the PDF
         const arrayBuffer = await file.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
-        const pdfData = await pdfParse(buffer);
-        const extractedText = pdfData.text;
+        const parser = new PDFParse({ data: buffer });
+        const textResult = await parser.getText();
+        const extractedText = textResult.text;
 
         // 2. Initialize the Gemini 1.5 Flash model
         const model = genAI.getGenerativeModel({
