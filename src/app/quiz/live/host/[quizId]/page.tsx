@@ -122,28 +122,48 @@ export default function HostLobbyPage({ params }: { params: Promise<{ quizId: st
 
             setSession(sessionData);
             setCurrentQuestionIndex(sessionData.current_question_index);
-            setPhase(
-                sessionData.status === 'finished' || sessionData.status === 'completed'
+            let restoredTimeExpired = false;
+            if (sessionData.current_question_index >= 0) {
+                const duration = quizData.per_question_timer || 30;
+                const questionKey = `live-quiz-${sessionData.id}-question-${sessionData.current_question_index}`;
+                const storedStartTime = window.localStorage.getItem(questionKey);
+                const startTime = storedStartTime ? Number(storedStartTime) : Date.now();
+                if (!storedStartTime) {
+                    window.localStorage.setItem(questionKey, String(startTime));
+                }
+                const remaining = Math.max(0, duration - Math.floor((Date.now() - startTime) / 1000));
+                setTimeLeft(remaining);
+                restoredTimeExpired = remaining === 0;
+            }
+            const restoredPhase = restoredTimeExpired && sessionData.status === 'active'
+                ? 'leaderboard'
+                : sessionData.status === 'finished' || sessionData.status === 'completed'
                     ? 'finished'
                     : sessionData.status === 'leaderboard'
                         ? 'leaderboard'
-                        : 'active'
-            );
+                        : 'active';
+            setPhase(restoredPhase);
             setReadOnlyResults(sessionData.status === 'completed');
             setLoading(false);
 
-            // 4. Initialize Supabase Realtime Subscription
-            channel = supabase
-                .channel(`room-${sessionData.room_code}`)
-                .on(
-                    'broadcast',
-                    { event: 'student-joined' },
-                    () => {
-                        setJoinedStudents((prev) => prev + 1);
-                    }
-                )
-                .subscribe();
-            channelRef.current = channel;
+            // 4. Initialize Supabase Realtime Subscription.
+            // Remove a previous development-mode channel before registering callbacks.
+            const channelName = `room-${sessionData.room_code}`;
+            const existingChannel = supabase.getChannels().find((item) => item.topic === `realtime:${channelName}`);
+            if (existingChannel) {
+                await supabase.removeChannel(existingChannel);
+            }
+
+            const roomChannel = supabase.channel(channelName, {
+                config: { presence: { key: 'host' } },
+            });
+            roomChannel.on('presence', { event: 'sync' }, () => {
+                const presenceState = roomChannel.presenceState();
+                setJoinedStudents(Object.keys(presenceState).filter((key) => key !== 'host').length);
+            });
+            channel = roomChannel;
+            channelRef.current = roomChannel;
+            roomChannel.subscribe();
         }
 
         initializeLiveSession();
@@ -186,12 +206,6 @@ export default function HostLobbyPage({ params }: { params: Promise<{ quizId: st
         if (timeLeft === 0) {
             const transition = window.setTimeout(() => {
                 setPhase('leaderboard');
-                if (session) {
-                    void supabase
-                        .from('quiz_sessions')
-                        .update({ status: 'leaderboard' })
-                        .eq('id', session.id);
-                }
             }, 0);
             return () => window.clearTimeout(transition);
         }
@@ -200,6 +214,7 @@ export default function HostLobbyPage({ params }: { params: Promise<{ quizId: st
             setTimeLeft((previous) => {
                 if (previous <= 1) {
                     window.clearInterval(timer);
+                    setPhase('leaderboard');
                     return 0;
                 }
                 return previous - 1;
@@ -229,7 +244,7 @@ export default function HostLobbyPage({ params }: { params: Promise<{ quizId: st
             totals.set(submission.student_id, {
                 studentId: submission.student_id,
                 name: existing?.name || profile?.full_name || 'Student',
-                score: (existing?.score || 0) + submission.score_awarded,
+                score: (existing?.score || 0) + (submission.is_correct ? Math.max(0, submission.score_awarded || 0) : 0),
                 correctAnswers: (existing?.correctAnswers || 0) + (submission.is_correct ? 1 : 0),
                 totalResponseTime: (existing?.totalResponseTime || 0) + (submission.response_time_ms || 0),
             });
@@ -267,9 +282,7 @@ export default function HostLobbyPage({ params }: { params: Promise<{ quizId: st
                 .eq('id', session.id);
             if (error) {
                 console.error('Failed to complete live session', error);
-                return;
             }
-            router.push('/dashboard/teacher');
         }, 10000);
 
         return () => window.clearTimeout(closeTimer);
@@ -279,6 +292,12 @@ export default function HostLobbyPage({ params }: { params: Promise<{ quizId: st
         if (!session || readOnlyResults || phase === 'finished') return;
 
         const nextIndex = currentQuestionIndex + 1;
+        const duration = quiz?.per_question_timer || 30;
+        const startTime = Date.now();
+        window.localStorage.setItem(
+            `live-quiz-${session.id}-question-${nextIndex}`,
+            String(startTime)
+        );
 
         // Update the database so all students' screens update simultaneously
         await supabase
@@ -290,12 +309,12 @@ export default function HostLobbyPage({ params }: { params: Promise<{ quizId: st
             .eq('id', session.id);
 
         setCurrentQuestionIndex(nextIndex);
-        setTimeLeft(quiz?.per_question_timer || 30);
+        setTimeLeft(duration);
         setPhase('active');
         await channelRef.current?.send({
             type: 'broadcast',
             event: 'question-started',
-            payload: { quizId, index: nextIndex, duration: quiz?.per_question_timer || 30 },
+            payload: { quizId, index: nextIndex, duration, startTime },
         });
     };
 
@@ -357,6 +376,14 @@ export default function HostLobbyPage({ params }: { params: Promise<{ quizId: st
                                     <button onClick={handleNextQuestion} disabled={phase === 'finished' || currentQuestionIndex >= questions.length - 1} className="mt-8 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-xl font-bold">
                                         {currentQuestionIndex >= questions.length - 1 ? 'Quiz Complete' : 'Next Question'}
                                     </button>
+                                    {phase === 'finished' && (
+                                        <button
+                                            onClick={() => router.push('/dashboard/teacher')}
+                                            className="mt-4 ml-3 px-6 py-3 bg-white text-gray-900 hover:bg-gray-200 rounded-xl font-bold"
+                                        >
+                                            Return to dashboard
+                                        </button>
+                                    )}
                                 </>
                             ) : currentQuestion ? (
                                 <>
