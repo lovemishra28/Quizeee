@@ -3,7 +3,7 @@ import QuizCreator from '@/components/QuizCreator';
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
-import { BookOpen, LogOut } from 'lucide-react';
+import { BookOpen, LogOut, Home, FilePlus2, BarChart3 } from 'lucide-react';
 
 export default function TeacherDashboard() {
     const [loading, setLoading] = useState(true);
@@ -145,8 +145,29 @@ export default function TeacherDashboard() {
                         Teacher Hub
                     </span>
                 </div>
-                <div className="flex items-center space-x-4">
-                    <span className="text-gray-700 font-medium">{userName}</span>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => router.push('/')}
+                        className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-100 hover:text-indigo-600 transition"
+                    >
+                        <Home className="w-4 h-4" />
+                        Home
+                    </button>
+                    <button
+                        onClick={() => router.push('/dashboard/teacher')}
+                        className="flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 transition"
+                    >
+                        <FilePlus2 className="w-4 h-4" />
+                        Quiz
+                    </button>
+                    <button
+                        onClick={() => router.push('/dashboard/teacher/analytics')}
+                        className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-100 hover:text-indigo-600 transition"
+                    >
+                        <BarChart3 className="w-4 h-4" />
+                        Analytics
+                    </button>
+                    <span className="ml-2 text-gray-700 font-medium">{userName}</span>
                     <button
                         onClick={handleSignOut}
                         className="flex items-center text-sm text-gray-500 hover:text-red-600 transition"
