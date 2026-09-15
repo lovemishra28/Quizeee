@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { processStudyMaterial } from '@/actions/generateQuiz';
-import { UploadCloud, Loader2, CheckCircle } from 'lucide-react';
+import { UploadCloud, Loader2, CheckCircle, Trash2, Plus } from 'lucide-react';
 
 export default function QuizCreator({ teacherId, onComplete }: { teacherId: string, onComplete?: () => void }) {
     const [file, setFile] = useState<File | null>(null);
@@ -14,6 +14,8 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
     const [availableUntil, setAvailableUntil] = useState('');
     const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState('');
+    const [generatedQuestions, setGeneratedQuestions] = useState<any[]>([]);
+    const [isReviewing, setIsReviewing] = useState(false);
 
     const handleUpload = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -40,9 +42,62 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
 
             if (!aiResponse.success) throw new Error(aiResponse.error);
 
-            setStatus('Structuring and saving to database...');
+            // 2. Load the questions into state and switch to the review screen
+            setGeneratedQuestions(aiResponse.questions);
+            setIsReviewing(true);
+            setStatus('Questions generated successfully! Please review them.');
 
-            // 2. Insert parent quiz record
+        } catch (error: any) {
+            console.error(error);
+            setStatus(`Error: ${error.message}`);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleQuestionChange = (index: number, newText: string) => {
+        const updatedQuestions = [...generatedQuestions];
+        updatedQuestions[index].question_text = newText;
+        setGeneratedQuestions(updatedQuestions);
+    };
+
+    const handleOptionChange = (questionIndex: number, optionIndex: number, newText: string) => {
+        const updatedQuestions = [...generatedQuestions];
+        updatedQuestions[questionIndex].options[optionIndex] = newText;
+        setGeneratedQuestions(updatedQuestions);
+    };
+
+    const handleCorrectAnswerChange = (questionIndex: number, correctIndex: number) => {
+        const updatedQuestions = [...generatedQuestions];
+        updatedQuestions[questionIndex].correct_option_index = correctIndex;
+        setGeneratedQuestions(updatedQuestions);
+    };
+
+    const handleDeleteQuestion = (index: number) => {
+        const updatedQuestions = [...generatedQuestions];
+        updatedQuestions.splice(index, 1);
+        setGeneratedQuestions(updatedQuestions);
+    };
+
+    const handleAddQuestion = () => {
+        setGeneratedQuestions([
+            ...generatedQuestions,
+            {
+                question_text: '',
+                options: ['', '', '', ''],
+                correct_option_index: 0,
+                explanation: '',
+                subtopic: ''
+            }
+        ]);
+    };
+
+    const handleSaveQuiz = async () => {
+        setLoading(true);
+        setStatus('Saving quiz to database...');
+
+        try {
+            // 1. Insert parent quiz record
             const { data: quizData, error: quizError } = await supabase
                 .from('quizzes')
                 .insert({
@@ -57,8 +112,8 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
 
             if (quizError) throw quizError;
 
-            // 3. Attach quiz_id and order index to AI questions
-            const questionsToInsert = aiResponse.questions.map((q: any, index: number) => ({
+            // 2. Attach quiz_id and order index to the reviewed questions
+            const questionsToInsert = generatedQuestions.map((q: any, index: number) => ({
                 quiz_id: quizData.id,
                 question_text: q.question_text,
                 options: q.options,
@@ -68,23 +123,24 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                 order_index: index + 1,
             }));
 
-            // 4. Bulk insert child question records
+            // 3. Bulk insert child question records
             const { error: questionsError } = await supabase
                 .from('questions')
                 .insert(questionsToInsert);
 
             if (questionsError) throw questionsError;
 
-            setStatus('Quiz created successfully!');
+            setStatus('Quiz saved successfully!');
             setTimeout(() => {
                 setStatus('');
                 setFile(null);
                 setTitle('');
                 setAvailableFrom('');
                 setAvailableUntil('');
+                setGeneratedQuestions([]);
+                setIsReviewing(false);
                 if (onComplete) onComplete();
             }, 2000);
-
         } catch (error: any) {
             console.error(error);
             setStatus(`Error: ${error.message}`);
@@ -92,6 +148,82 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
             setLoading(false);
         }
     };
+
+    if (isReviewing) {
+        return (
+            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm max-h-[80vh] overflow-y-auto">
+                <h3 className="text-xl font-bold text-gray-900 mb-4">Review Generated Questions</h3>
+                <p className="text-gray-500 mb-6 text-sm">Make any necessary edits before saving to the database.</p>
+                
+                <div className="space-y-8">
+                    {generatedQuestions.map((q, qIndex) => (
+                        <div key={qIndex} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                            <div className="flex justify-between items-center mb-2">
+                                <label className="block text-sm font-bold text-gray-700">Question {qIndex + 1}</label>
+                                <button
+                                    onClick={() => handleDeleteQuestion(qIndex)}
+                                    className="text-red-500 hover:text-red-700 p-1"
+                                    title="Delete Question"
+                                    type="button"
+                                >
+                                    <Trash2 className="w-5 h-5" />
+                                </button>
+                            </div>
+                            <textarea
+                                value={q.question_text}
+                                onChange={(e) => handleQuestionChange(qIndex, e.target.value)}
+                                className="w-full px-4 py-2 mb-4 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none resize-none"
+                                rows={2}
+                            />
+                            
+                            <div className="space-y-3">
+                                {q.options.map((option: string, oIndex: number) => (
+                                    <div key={oIndex} className="flex items-center gap-3">
+                                        <input
+                                            type="radio"
+                                            name={`correct-${qIndex}`}
+                                            checked={q.correct_option_index === oIndex}
+                                            onChange={() => handleCorrectAnswerChange(qIndex, oIndex)}
+                                            className="w-5 h-5 text-indigo-600 focus:ring-indigo-500"
+                                        />
+                                        <input
+                                            type="text"
+                                            value={option}
+                                            onChange={(e) => handleOptionChange(qIndex, oIndex, e.target.value)}
+                                            className="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                <div className="mt-8 flex flex-col sm:flex-row gap-4">
+                    <button
+                        onClick={() => setIsReviewing(false)}
+                        className="flex-1 py-3 bg-white border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition"
+                    >
+                        Cancel & Discard
+                    </button>
+                    <button
+                        onClick={handleAddQuestion}
+                        className="flex-1 py-3 bg-indigo-100 text-indigo-700 font-semibold rounded-lg hover:bg-indigo-200 transition flex items-center justify-center gap-2"
+                        type="button"
+                    >
+                        <Plus className="w-5 h-5" /> Add Question
+                    </button>
+                    <button
+                        onClick={handleSaveQuiz}
+                        disabled={loading}
+                        className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-semibold rounded-lg transition"
+                    >
+                        {loading ? 'Saving to Database...' : 'Confirm & Save Quiz'}
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
