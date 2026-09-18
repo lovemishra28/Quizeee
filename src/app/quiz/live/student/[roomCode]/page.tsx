@@ -352,20 +352,22 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
 
   if (status === 'joining') {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-bg">
+        <Loader2 className="w-12 h-12 text-brand animate-spin" />
       </div>
     );
   }
 
   if (status === 'waiting') {
     return (
-      <div className="min-h-screen bg-indigo-600 flex flex-col items-center justify-center p-6 text-white">
-        <div className="bg-white/10 p-6 rounded-full mb-6">
-          <MonitorPlay className="w-12 h-12 text-indigo-100" />
+      <div className="min-h-screen bg-bg flex flex-col items-center justify-center p-6 text-black">
+        <div className="bg-brand-lightest border-2 border-brand-light rounded-[2rem] p-12 text-center max-w-xl w-full shadow-sm">
+          <div className="inline-flex bg-brand-light p-6 rounded-full mb-8">
+            <MonitorPlay className="w-12 h-12 text-brand" />
+          </div>
+          <h2 className="text-4xl sm:text-5xl font-black font-mono tracking-tighter mb-4">You're in, {userName}!</h2>
+          <p className="text-gray-600 font-mono text-xl">Waiting for the teacher to start...</p>
         </div>
-        <h2 className="text-3xl font-bold mb-2">You're in, {userName}!</h2>
-        <p className="text-indigo-200 text-lg">Waiting for the teacher to start...</p>
       </div>
     );
   }
@@ -373,55 +375,55 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
   if (status === 'feedback') {
     if (restoredSubmission.current && timeLeft > 0) {
       return (
-        <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-6 text-center">
-          <Loader2 className="w-10 h-10 text-indigo-600 animate-spin mb-4" />
-          <h1 className="text-2xl font-bold text-gray-900">Answer submitted</h1>
-          <p className="mt-2 text-gray-500">Waiting for the teacher to start the next question...</p>
+        <div className="min-h-screen flex flex-col items-center justify-center bg-bg p-6 text-center">
+          <Loader2 className="w-12 h-12 text-brand animate-spin mb-6" />
+          <h1 className="text-3xl font-black font-mono tracking-tighter text-black">Answer submitted</h1>
+          <p className="mt-4 text-gray-500 font-mono text-lg">Waiting for the teacher to start the next question...</p>
         </div>
       );
     }
 
     if (timeLeft > 0 || !currentQuestion || !answerFeedback) {
       return (
-        <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-6 text-center">
-          <Loader2 className="w-10 h-10 text-indigo-600 animate-spin mb-4" />
-          <h1 className="text-2xl font-bold text-gray-900">Waiting for the question timer...</h1>
-          <p className="mt-2 text-gray-500">The answer result will appear when the timer reaches zero.</p>
-          <p className="mt-4 text-xl font-bold text-indigo-600">{timeLeft}s remaining</p>
+        <div className="min-h-screen flex flex-col items-center justify-center bg-bg p-6 text-center">
+          <Loader2 className="w-12 h-12 text-brand animate-spin mb-6" />
+          <h1 className="text-3xl font-black font-mono tracking-tighter text-black">Waiting for the question timer...</h1>
+          <p className="mt-4 text-gray-500 font-mono text-lg">The answer result will appear when the timer reaches zero.</p>
+          <p className="mt-6 text-3xl font-black font-mono text-brand">{timeLeft}s remaining</p>
         </div>
       );
     }
 
     return (
-      <div className="min-h-screen bg-gray-50 p-6">
-        <main className="max-w-2xl mx-auto pt-10">
-          <p className={`text-center text-2xl font-black mb-8 ${answerFeedback.isCorrect ? 'text-green-600' : 'text-red-600'}`}>
+      <div className="min-h-screen bg-bg p-6">
+        <main className="max-w-4xl mx-auto pt-10">
+          <p className={`text-center text-4xl font-black font-mono tracking-tighter mb-12 ${answerFeedback.isCorrect ? 'text-green-600' : 'text-red-600'}`}>
             {answerFeedback.isCorrect ? 'Your answer was correct!' : 'Your answer was wrong.'}
           </p>
-          <div className="grid gap-4">
+          <div className="grid gap-4 sm:grid-cols-2">
             {currentQuestion.options.map((option, index) => {
               const isCorrect = index === answerFeedback.correctIndex;
               const isSelected = index === answerFeedback.selectedIndex;
               return (
                 <div
                   key={`${currentQuestion.id}-${index}`}
-                  className={`rounded-xl border-2 p-5 text-lg font-semibold ${
+                  className={`rounded-xl border-2 p-6 text-xl font-mono font-bold transition-all ${
                     isCorrect
-                      ? 'border-green-500 bg-green-50 text-green-900'
+                      ? 'border-green-500 bg-green-50 text-green-900 shadow-sm'
                       : isSelected
-                        ? 'border-red-500 bg-red-50 text-red-900'
-                        : 'border-gray-200 bg-white text-gray-700'
+                        ? 'border-red-500 bg-red-50 text-red-900 shadow-sm'
+                        : 'border-brand-light bg-white text-gray-700 opacity-60'
                   }`}
                 >
-                  <span className="mr-3">{String.fromCharCode(65 + index)}.</span>
+                  <span className="mr-4 font-black">{String.fromCharCode(65 + index)}.</span>
                   {option}
-                  {isCorrect && <p className="mt-2 text-sm font-bold text-green-700">Correct answer</p>}
-                  {isSelected && !isCorrect && <p className="mt-2 text-sm font-bold text-red-700">Your answer</p>}
+                  {isCorrect && <p className="mt-3 text-sm font-black text-green-700 uppercase tracking-widest">Correct answer</p>}
+                  {isSelected && !isCorrect && <p className="mt-3 text-sm font-black text-red-700 uppercase tracking-widest">Your answer</p>}
                 </div>
               );
             })}
           </div>
-          <p className="mt-8 text-center text-gray-500">Waiting for the teacher to start the next question...</p>
+          <p className="mt-12 text-center text-gray-500 font-mono font-bold">Waiting for the teacher to start the next question...</p>
         </main>
       </div>
     );
@@ -435,35 +437,35 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
     const isWinner = status === 'finished' && winner?.studentId === studentId;
 
     return (
-      <div className="min-h-screen bg-indigo-600 p-6 text-white">
-        <main className="max-w-2xl mx-auto pt-10">
+      <div className="min-h-screen bg-bg p-6 text-black">
+        <main className="max-w-4xl mx-auto pt-10">
           {status === 'finished' && winner ? (
-            <div className="text-center mb-8 animate-bounce">
-              <Trophy className="w-16 h-16 text-yellow-300 mx-auto mb-3" />
-              <p className="text-yellow-200 uppercase tracking-widest font-bold">
+            <div className="text-center mb-12 animate-bounce bg-brand-lightest p-10 rounded-[2rem] border-2 border-brand-light shadow-sm">
+              <Trophy className="w-20 h-20 text-brand mx-auto mb-4" />
+              <p className="text-brand uppercase tracking-widest font-black font-mono text-xl mb-2">
                 {isWinner ? 'You are the winner!' : 'Winner'}
               </p>
-              <h1 className="text-4xl font-black">{winner.name}</h1>
-              <p className="text-indigo-200 mt-1">
-                {winner.correctAnswers} correct answers · {winner.score} points
+              <h1 className="text-6xl font-black font-mono tracking-tighter text-black">{winner.name}</h1>
+              <p className="text-gray-500 font-bold font-mono text-lg mt-4">
+                {winner.correctAnswers} correct answers • {winner.score} points
               </p>
             </div>
-          ) : <h1 className="text-3xl font-black mb-8">Leaderboard</h1>}
+          ) : <h1 className="text-5xl font-black font-mono tracking-tighter mb-10 text-center">Leaderboard</h1>}
           {studentRank > 0 && (
-            <p className="mb-6 text-center text-lg font-bold text-yellow-200">
+            <p className="mb-8 text-center text-2xl font-black font-mono text-brand">
               Your position: #{studentRank}
             </p>
           )}
-          <ol className="space-y-3">
+          <ol className="space-y-4">
             {leaderboard.slice(status === 'finished' ? 1 : 0).map((entry, index) => (
-              <li key={entry.studentId} className="rounded-xl bg-white/10 p-4">
-                <div className="flex justify-between">
-                  <span>{index + (status === 'finished' ? 2 : 1)}. {entry.name}</span>
-                  <strong>{entry.correctAnswers} correct · {entry.score} pts</strong>
+              <li key={entry.studentId} className="rounded-2xl border-2 border-brand-light bg-brand-lightest p-6 shadow-sm">
+                <div className="flex justify-between items-center font-mono text-xl">
+                  <span className="font-bold text-black">{index + (status === 'finished' ? 2 : 1)}. {entry.name}</span>
+                  <strong className="text-brand">{entry.correctAnswers} correct • {entry.score} pts</strong>
                 </div>
-                <div className="mt-2 h-2 rounded-full bg-white/10">
+                <div className="mt-4 h-3 rounded-full bg-brand-light overflow-hidden">
                   <div
-                    className="h-2 rounded-full bg-indigo-300"
+                    className="h-3 rounded-full bg-brand transition-all duration-1000"
                     style={{ width: `${leaderboard[0]?.score ? (entry.score / leaderboard[0].score) * 100 : 0}%` }}
                   />
                 </div>
@@ -472,11 +474,11 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
           </ol>
           <button
             onClick={() => router.push('/dashboard/student')}
-            className="mt-8 w-full rounded-xl bg-white px-5 py-3 font-bold text-indigo-700 transition hover:bg-indigo-50"
+            className="mt-12 w-full rounded-xl bg-brand hover:bg-[#c47155] px-8 py-5 font-black font-mono text-2xl text-black transition shadow-sm"
           >
             Return to dashboard
           </button>
-          {status !== 'finished' && <p className="mt-8 text-indigo-200">Waiting for the teacher to start the next question...</p>}
+          {status !== 'finished' && <p className="mt-8 text-gray-500 font-mono text-center font-bold">Waiting for the teacher to start the next question...</p>}
         </main>
       </div>
     );
@@ -484,52 +486,68 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
 
   if (status === 'completed') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-indigo-600 p-6 text-white">
-        <p className="text-xl font-semibold">This live quiz has ended.</p>
-        <button
-          onClick={() => router.push('/dashboard/student')}
-          className="mt-6 rounded-xl bg-white px-5 py-3 font-bold text-indigo-700 transition hover:bg-indigo-50"
-        >
-          Return to dashboard
-        </button>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-bg p-6 text-black">
+        <div className="bg-brand-lightest border-2 border-brand-light rounded-[2rem] p-12 text-center shadow-sm">
+          <p className="text-3xl font-black font-mono tracking-tighter mb-8">This live quiz has ended.</p>
+          <button
+            onClick={() => router.push('/dashboard/student')}
+            className="w-full rounded-xl bg-brand hover:bg-[#c47155] px-8 py-5 font-black font-mono text-xl text-black transition shadow-sm"
+          >
+            Return to dashboard
+          </button>
+        </div>
       </div>
     );
   }
 
   if (!currentQuestion) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-bg">
+        <Loader2 className="w-12 h-12 text-brand animate-spin" />
       </div>
     );
   }
 
   if (hasSubmitted) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-6 text-center">
-        <Loader2 className="w-10 h-10 text-indigo-600 animate-spin mb-4" />
-        <h1 className="text-2xl font-bold text-gray-900">Waiting for next question...</h1>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-bg p-6 text-center">
+        <Loader2 className="w-12 h-12 text-brand animate-spin mb-6" />
+        <h1 className="text-3xl font-black font-mono tracking-tighter text-black">Waiting for next question...</h1>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <main className="max-w-2xl mx-auto pt-10">
-        <p className="text-sm font-semibold uppercase tracking-widest text-indigo-600 mb-3">Live quiz</p>
-        <p className="text-sm font-bold text-gray-500 mb-3">Time left: {timeLeft}s</p>
-        <h1 className="text-3xl font-black text-gray-900 mb-8">{currentQuestion.question_text}</h1>
-        <div className="grid gap-4">
-          {currentQuestion.options.map((option, index) => (
-            <button
-              key={`${currentQuestion.id}-${index}`}
-              onClick={() => handleAnswerSubmit(index)}
-              className="w-full rounded-xl bg-white border border-gray-200 p-5 text-left text-lg font-semibold text-gray-900 shadow-sm transition hover:border-indigo-500 hover:bg-indigo-50"
-            >
-              <span className="mr-3 text-indigo-600">{String.fromCharCode(65 + index)}.</span>
-              {option}
-            </button>
-          ))}
+    <div className="min-h-screen bg-bg p-6 flex flex-col items-center">
+      <main className="max-w-4xl w-full pt-10">
+        <div className="flex justify-between items-center mb-8 bg-brand-lightest border-2 border-brand-light p-6 rounded-2xl shadow-sm">
+          <p className="text-lg font-bold font-mono uppercase tracking-widest text-brand">Live quiz</p>
+          <div className="flex items-center gap-3">
+            <span className="text-lg font-bold font-mono text-gray-500">Time left:</span>
+            <span className={`text-2xl font-black font-mono px-4 py-2 rounded-xl ${timeLeft < 10 ? 'bg-red-100 text-red-600' : 'bg-brand-light text-black'}`}>
+              {timeLeft}s
+            </span>
+          </div>
+        </div>
+        
+        <div className="bg-brand-lightest p-10 rounded-[2rem] shadow-sm border-2 border-brand-light mb-8">
+          <h1 className="text-4xl sm:text-5xl font-black font-mono tracking-tighter text-black mb-12 leading-tight">
+            {currentQuestion.question_text}
+          </h1>
+          <div className="grid gap-4">
+            {currentQuestion.options.map((option, index) => (
+              <button
+                key={`${currentQuestion.id}-${index}`}
+                onClick={() => handleAnswerSubmit(index)}
+                className="w-full rounded-xl bg-white border-2 border-brand-light p-6 text-left text-2xl font-bold font-mono text-black shadow-sm transition hover:border-brand hover:bg-brand-lightest hover:scale-[1.01]"
+              >
+                <span className="mr-4 inline-block w-10 h-10 text-center leading-[2.1rem] rounded-full bg-brand-light text-black border-2 border-transparent">
+                  {String.fromCharCode(65 + index)}
+                </span>
+                {option}
+              </button>
+            ))}
+          </div>
         </div>
       </main>
     </div>

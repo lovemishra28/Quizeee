@@ -226,83 +226,38 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
     }
 
     return (
-        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-            <h3 className="text-xl font-bold text-gray-900 mb-4">Generate AI Quiz</h3>
-            <form onSubmit={handleUpload} className="space-y-4">
-                <div className="flex gap-4">
-                    <div className="flex-1">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Quiz Title</label>
+        <div className="bg-brand-lightest p-8 rounded-[2rem] border border-brand-light shadow-sm mb-12">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
+                <h3 className="text-5xl sm:text-6xl font-bold font-mono tracking-tighter text-black">Create Quiz</h3>
+                <div className="flex gap-2">
+                    <button
+                        type="button"
+                        onClick={() => setType('static')}
+                        className={`px-6 sm:px-8 py-2 sm:py-3 rounded-xl font-mono text-lg sm:text-xl font-bold border-2 transition ${type === 'static' ? 'bg-white border-brand-light text-black shadow-sm' : 'border-transparent text-gray-500 hover:text-black'}`}
+                    >
+                        Static
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setType('competitive')}
+                        className={`px-6 sm:px-8 py-2 sm:py-3 rounded-xl font-mono text-lg sm:text-xl font-bold border-2 transition ${type === 'competitive' ? 'bg-brand border-brand text-black shadow-sm' : 'border-transparent text-gray-500 hover:text-black'}`}
+                    >
+                        Competitive
+                    </button>
+                </div>
+            </div>
+
+            <form onSubmit={handleUpload} className="space-y-6">
+                <div className="flex flex-col sm:flex-row gap-6 items-stretch">
+                    <div className="flex-1 flex flex-col justify-between gap-6">
                         <input
                             type="text"
                             required
                             value={title}
                             onChange={(e) => setTitle(e.target.value)}
-                            placeholder="e.g., Biology Chapter 4: Cell Division"
-                            className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                            placeholder="Title...."
+                            className="w-full px-6 py-6 border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none bg-white text-2xl font-light placeholder:text-gray-400"
                         />
-                    </div>
-                    <div className="w-48">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Quiz Type</label>
-                        <select
-                            value={type}
-                            onChange={(e) => setType(e.target.value)}
-                            className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
-                        >
-                            <option value="static">Static (Self-paced)</option>
-                            <option value="competitive">Competitive (Live)</option>
-                        </select>
-                    </div>
-                </div>
-
-                {type === 'static' && (
-                    <div className="grid gap-4 sm:grid-cols-2 rounded-lg bg-indigo-50 p-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Available from</label>
-                            <input
-                                type="datetime-local"
-                                required
-                                value={availableFrom}
-                                onChange={(e) => setAvailableFrom(e.target.value)}
-                                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Available until</label>
-                            <input
-                                type="datetime-local"
-                                required
-                                value={availableUntil}
-                                onChange={(e) => setAvailableUntil(e.target.value)}
-                                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
-                            />
-                        </div>
-                    </div>
-                )}
-
-                <div className="flex gap-4">
-                    <div className="flex-1">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Study Material (PDF)</label>
-                        <div className="flex items-center justify-center w-full">
-                            <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 transition">
-                                <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                                    <UploadCloud className="w-8 h-8 text-gray-400 mb-2" />
-                                    <p className="text-sm text-gray-500">
-                                        <span className="font-semibold">Click to upload</span> or drag and drop
-                                    </p>
-                                    {file && <p className="text-xs text-indigo-600 mt-2 font-medium">{file.name}</p>}
-                                </div>
-                                <input
-                                    type="file"
-                                    className="hidden"
-                                    accept="application/pdf"
-                                    onChange={(e) => setFile(e.target.files?.[0] || null)}
-                                />
-                            </label>
-                        </div>
-                    </div>
-
-                    <div className="w-32">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Questions</label>
                         <input
                             type="number"
                             min="1"
@@ -312,14 +267,58 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                                 const val = parseInt(e.target.value);
                                 setQuestionCount(isNaN(val) ? 0 : val);
                             }}
-                            className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                            placeholder="No. of Questions"
+                            className="w-full px-6 py-6 border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none bg-white text-2xl font-light placeholder:text-gray-400"
                         />
+                    </div>
+                    
+                    <div className="w-full sm:w-[350px]">
+                        <label className="flex flex-col items-center justify-center w-full h-full min-h-[160px] border-2 border-brand-light rounded-xl cursor-pointer bg-white hover:bg-gray-50 transition">
+                            <div className="flex flex-col items-center justify-center p-8">
+                                <UploadCloud className="w-10 h-10 text-black mb-4" />
+                                <p className="text-sm text-black text-center">
+                                    <span className="font-bold">Click to Upload</span> or drag<br/>and drop
+                                </p>
+                                {file && <p className="text-xs text-brand mt-4 font-bold">{file.name}</p>}
+                            </div>
+                            <input
+                                type="file"
+                                className="hidden"
+                                accept="application/pdf"
+                                onChange={(e) => setFile(e.target.files?.[0] || null)}
+                            />
+                        </label>
                     </div>
                 </div>
 
+                {type === 'static' && (
+                    <div className="grid gap-4 sm:grid-cols-2 rounded-xl bg-white/50 border border-brand-light p-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Available from</label>
+                            <input
+                                type="datetime-local"
+                                required
+                                value={availableFrom}
+                                onChange={(e) => setAvailableFrom(e.target.value)}
+                                className="w-full px-4 py-3 border-2 border-brand-light rounded-lg focus:ring-2 focus:ring-brand outline-none bg-white"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Available until</label>
+                            <input
+                                type="datetime-local"
+                                required
+                                value={availableUntil}
+                                onChange={(e) => setAvailableUntil(e.target.value)}
+                                className="w-full px-4 py-3 border-2 border-brand-light rounded-lg focus:ring-2 focus:ring-brand outline-none bg-white"
+                            />
+                        </div>
+                    </div>
+                )}
+
                 {status && (
-                    <div className={`p-3 rounded-lg text-sm flex items-center ${status.includes('Error') ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-700'}`}>
-                        {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
+                    <div className={`p-4 rounded-xl text-sm flex items-center font-medium ${status.includes('Error') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>
+                        {loading ? <Loader2 className="w-5 h-5 mr-3 animate-spin" /> : <CheckCircle className="w-5 h-5 mr-3" />}
                         {status}
                     </div>
                 )}
@@ -327,9 +326,9 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                 <button
                     type="submit"
                     disabled={loading || !file || !title}
-                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-semibold rounded-lg transition"
+                    className="w-full py-5 bg-brand hover:bg-[#c47155] disabled:bg-brand-light text-black font-mono text-3xl font-normal tracking-wide rounded-xl transition shadow-sm"
                 >
-                    {loading ? 'Processing...' : 'Generate Questions'}
+                    {loading ? 'Processing...' : 'Generate Quiz'}
                 </button>
             </form>
         </div>

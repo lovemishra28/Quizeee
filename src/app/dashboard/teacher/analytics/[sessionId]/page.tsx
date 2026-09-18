@@ -144,20 +144,20 @@ export default function AnalyticsDashboard({
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-bg">
+        <Loader2 className="w-8 h-8 text-brand animate-spin" />
       </div>
     );
   }
 
   if (errorMessage || !sessionData) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-6 text-center">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-bg p-6 text-center">
         <AlertCircle className="w-12 h-12 text-red-400 mb-4" />
-        <p className="text-gray-700">{errorMessage || 'Analytics are unavailable.'}</p>
+        <p className="text-gray-700 font-mono text-xl">{errorMessage || 'Analytics are unavailable.'}</p>
         <button
           onClick={() => router.push('/dashboard/teacher')}
-          className="mt-6 rounded-lg bg-indigo-600 px-5 py-3 font-semibold text-white hover:bg-indigo-700"
+          className="mt-6 rounded-xl bg-brand px-6 py-3 font-bold font-mono text-black hover:bg-[#c47155]"
         >
           Return to dashboard
         </button>
@@ -166,73 +166,82 @@ export default function AnalyticsDashboard({
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-5xl mx-auto">
+    <div className="min-h-screen bg-bg p-6">
+      <div className="max-w-6xl mx-auto">
         <button
-          onClick={() => router.push('/dashboard/teacher')}
-          className="mb-6 flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:text-indigo-800"
+          onClick={() => router.push('/dashboard/teacher/analytics')}
+          className="mb-8 flex items-center gap-2 text-sm font-bold font-mono text-brand hover:text-black transition"
         >
           <ArrowLeft className="h-4 w-4" />
-          Back to dashboard
+          Back
         </button>
 
-        <div className="flex items-center gap-3 mb-8">
-          <BarChart3 className="w-8 h-8 text-indigo-600" />
-          <h1 className="text-3xl font-bold text-gray-900">
-            Post-Quiz Analytics: {quizMetadata?.title || 'Quiz'}
+        <div className="flex items-center gap-4 mb-8 min-w-0">
+          <BarChart3 className="w-10 h-10 text-brand shrink-0" />
+          <h1 className="text-4xl sm:text-5xl font-bold font-mono tracking-tighter text-black " title={quizMetadata?.title || 'Quiz'}>
+            {quizMetadata?.title || 'Quiz'}
           </h1>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-            <p className="text-sm font-medium text-gray-500 mb-1">Class Accuracy</p>
-            <h2 className="text-4xl font-black text-indigo-600">{overallAccuracy}%</h2>
+          <div className="bg-brand-lightest p-8 rounded-[2rem] border border-brand-light shadow-sm flex flex-col items-center justify-center text-center">
+            <p className="text-lg font-bold font-mono text-gray-500 mb-2">Class Accuracy</p>
+            <h2 className="text-6xl font-black font-mono text-brand">{overallAccuracy}%</h2>
           </div>
-          <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-            <p className="text-sm font-medium text-gray-500 mb-1">Topics Assessed</p>
-            <h2 className="text-4xl font-black text-gray-900">{chartData.length}</h2>
+          <div className="bg-brand-lightest p-8 rounded-[2rem] border border-brand-light shadow-sm flex flex-col items-center justify-center text-center">
+            <p className="text-lg font-bold font-mono text-gray-500 mb-2">Topics Assessed</p>
+            <h2 className="text-6xl font-black font-mono text-black">{chartData.length}</h2>
           </div>
-          <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-            <p className="text-sm font-medium text-gray-500 mb-1">Quiz Type</p>
-            <h2 className="text-2xl font-black capitalize text-gray-900">
+          <div className="bg-brand-lightest p-8 rounded-[2rem] border border-brand-light shadow-sm flex flex-col items-center justify-center text-center">
+            <p className="text-lg font-bold font-mono text-gray-500 mb-2">Quiz Type</p>
+            <h2 className="text-5xl font-black font-mono capitalize text-black">
               {quizMetadata?.type || 'Unknown'}
             </h2>
           </div>
         </div>
 
-        <div className="bg-white p-8 rounded-xl border border-gray-200 shadow-sm h-[400px]">
-          <h2 className="text-xl font-bold text-gray-900 mb-6">
+        <div className="bg-brand-lightest p-8 rounded-[2rem] border border-brand-light shadow-sm h-[500px]">
+          <h2 className="text-3xl font-bold font-mono text-black mb-8 text-center sm:text-left">
             Classroom Comprehension by Subtopic
           </h2>
           {chartData.length === 0 ? (
-            <div className="h-[280px] flex items-center justify-center text-gray-500">
+            <div className="h-[300px] flex items-center justify-center text-gray-500 font-mono text-xl">
               No submissions are available for this session yet.
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
               <RechartsBarChart
                 data={chartData}
-                margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+                margin={{ top: 10, right: 30, left: 0, bottom: 40 }}
               >
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#6b7280' }} />
+                <XAxis
+                  dataKey="name"
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#6b7280', fontSize: 14, fontFamily: 'monospace', fontWeight: 'bold' }}
+                />
                 <YAxis
                   domain={[0, 100]}
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fill: '#6b7280' }}
+                  tick={{ fill: '#6b7280', fontSize: 14, fontFamily: 'monospace', fontWeight: 'bold' }}
                   tickFormatter={(value: number) => `${value}%`}
                 />
                 <Tooltip
                   formatter={(value) => [`${value ?? 0}%`, 'Accuracy']}
-                  cursor={{ fill: '#f3f4f6' }}
+                  cursor={{ fill: '#f3e6e1' }}
                   contentStyle={{
-                    borderRadius: '8px',
-                    border: 'none',
+                    borderRadius: '12px',
+                    border: '2px solid #ebd8ce',
                     boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
+                    backgroundColor: '#ffffff',
+                    fontFamily: 'monospace',
+                    fontWeight: 'bold',
+                    fontSize: '16px'
                   }}
                 />
-                <Bar dataKey="accuracy" fill="#4f46e5" radius={[6, 6, 0, 0]} maxBarSize={60} />
+                <Bar dataKey="accuracy" fill="#d27d60" radius={[12, 12, 0, 0]} maxBarSize={80} />
               </RechartsBarChart>
             </ResponsiveContainer>
           )}

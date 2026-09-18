@@ -53,7 +53,7 @@ export default function StudentDashboard() {
                 .from('submissions')
                 .select('quiz_sessions(quiz_id)')
                 .eq('student_id', session.user.id);
-            
+
             if (submissionsData) {
                 const completed = new Set<string>();
                 submissionsData.forEach((sub: any) => {
@@ -112,43 +112,45 @@ export default function StudentDashboard() {
 
     if (loading) {
         return (
-            <div className="min-h-screen flex items-center justify-center bg-gray-50">
-                <p className="text-gray-500 font-medium">Verifying student authorization...</p>
+            <div className="min-h-screen flex items-center justify-center bg-bg">
+                <p className="text-gray-500 font-medium font-mono">Verifying student authorization...</p>
             </div>
         );
     }
 
     return (
-        <div className="min-h-screen bg-gray-50">
+        <div className="min-h-screen bg-bg">
             {/* Top Navigation */}
-            <nav className="bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
-                <div className="flex items-center space-x-3">
-                    <span className="text-2xl font-black text-indigo-600">Quizeee</span>
-                    <span className="bg-green-100 text-green-700 text-xs px-2.5 py-1 rounded-full font-semibold">
+            <nav className="border-b border-brand-light px-12 py-6 flex justify-between items-center sticky top-0 z-10 bg-bg">
+                <div className="flex flex-col items-start gap-1">
+                    <span className="text-4xl font-black text-brand tracking-tighter">quizeee</span>
+                    <span className="bg-brand-light text-black text-xs px-3 py-1 rounded-full font-medium tracking-wide">
                         Student Hub
                     </span>
                 </div>
-                <div className="flex items-center space-x-4">
-                    <span className="text-gray-700 font-medium">{userName}</span>
-                    <button
-                        onClick={handleSignOut}
-                        className="flex items-center text-sm text-gray-500 hover:text-red-600 transition"
-                    >
-                        <LogOut className="w-4 h-4 mr-1" />
-                        Sign Out
-                    </button>
+                <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-2 ml-4">
+                        <span className="text-black font-bold text-sm">{userName || 'Student'}</span>
+                        <button
+                            onClick={handleSignOut}
+                            className="ml-2 flex items-center text-sm text-gray-500 hover:text-red-600 transition"
+                            title="Sign Out"
+                        >
+                            <LogOut className="w-4 h-4" />
+                        </button>
+                    </div>
                 </div>
             </nav>
 
             {/* Main Content Area */}
-            <main className="max-w-xl mx-auto p-6 mt-12">
-                <div className="bg-white p-8 rounded-2xl border border-gray-200 shadow-sm text-center">
-                    <div className="inline-flex p-4 bg-indigo-50 text-indigo-600 rounded-full mb-4">
+            <main className="max-w-6xl mx-auto p-6 mt-4">
+                <div className="bg-brand-lightest p-8 rounded-[2rem] border border-brand-light shadow-sm text-center max-w-2xl mx-auto mb-12">
+                    <div className="inline-flex p-4 bg-brand-light text-brand rounded-full mb-4">
                         <Hash className="w-8 h-8" />
                     </div>
-                    <h2 className="text-2xl font-bold text-gray-900 mb-2">Join Your Quiz</h2>
-                    <p className="text-gray-500 text-sm mb-6">
-                        Enter the 6-digit room code displayed on your teacher's projector screen.
+                    <h2 className="text-4xl font-bold font-mono tracking-tighter text-black mb-2">Join Your Quiz</h2>
+                    <p className="text-gray-600 font-mono mb-6">
+                        Enter the 6-digit room code.
                     </p>
 
                     <form onSubmit={handleJoinSession} className="space-y-4">
@@ -158,56 +160,62 @@ export default function StudentDashboard() {
                             value={roomCode}
                             onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
                             placeholder="e.g. 849201"
-                            className="w-full px-4 py-3 text-center text-2xl font-mono tracking-widest border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none uppercase"
+                            className="w-full px-6 py-4 text-center text-3xl font-mono tracking-widest border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none uppercase bg-white text-black"
                         />
                         <button
                             type="submit"
-                            className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl flex items-center justify-center transition"
+                            className="w-full py-4 bg-brand hover:bg-[#c47155] text-black font-mono font-bold text-xl rounded-xl flex items-center justify-center transition shadow-sm"
                         >
-                            <Play className="w-5 h-5 mr-2" />
+                            <Play className="w-6 h-6 mr-2" />
                             Enter Quiz Room
                         </button>
                     </form>
                 </div>
 
                 {/* Available Static Quizzes */}
-                <div className="mt-12">
-                    <h3 className="text-xl font-bold text-gray-900 mb-6">Quiz History</h3>
+                <div className="mt-12 space-y-6">
+                    <h3 className="text-3xl font-bold font-mono tracking-tighter text-black mb-6">Quiz History</h3>
                     {staticQuizzes.length === 0 ? (
-                        <p className="text-gray-500 text-center py-8">No static quizzes available right now.</p>
+                        <div className="bg-white p-8 rounded-xl border-2 border-brand-light shadow-sm text-center">
+                            <p className="text-gray-500 font-mono">No static quizzes available right now.</p>
+                        </div>
                     ) : (
-                        <div className="grid gap-4">
+                        <div className="space-y-4">
                             {staticQuizzes.map((quiz) => {
                                 const isCompleted = completedQuizIds.has(quiz.id);
                                 const isClosed = quiz.available_until && Date.now() >= new Date(quiz.available_until).getTime();
                                 return (
-                                    <div key={quiz.id} className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex justify-between items-center">
-                                        <div>
-                                            <h4 className="text-lg font-bold text-gray-900">{quiz.title}</h4>
-                                            <p className="text-sm text-gray-500 mt-1">
-                                                {quiz.total_duration_minutes || 45} mins • Self-paced
-                                            </p>
-                                        </div>
-                                        <div>
-                                            {isCompleted ? (
-                                                <button
-                                                    onClick={() => router.push(`/quiz/static/${quiz.id}?review=1`)}
-                                                    className="px-4 py-2 bg-green-100 text-green-700 hover:bg-green-200 font-semibold rounded-lg text-sm"
-                                                >
-                                                    Review Quiz
-                                                </button>
-                                            ) : isClosed ? (
-                                                <span className="px-4 py-2 bg-gray-100 text-gray-600 font-semibold rounded-lg text-sm">
-                                                    Closed
-                                                </span>
-                                            ) : (
-                                                <button
-                                                    onClick={() => router.push(`/quiz/static/${quiz.id}`)}
-                                                    className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition text-sm"
-                                                >
-                                                    Take Quiz
-                                                </button>
-                                            )}
+                                    <div key={quiz.id} className="bg-transparent border-b border-brand-light border-dashed transition-all duration-200 block text-left">
+                                        <div className="p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center hover:bg-brand-lightest/50 rounded-xl gap-4">
+                                            <div className="flex flex-col gap-2 min-w-0 flex-1">
+                                                <h4 className="text-3xl font-normal font-mono text-black truncate" title={quiz.title}>{quiz.title}</h4>
+                                                <div className="flex items-center space-x-4">
+                                                    <span className="text-xs font-mono text-gray-600 font-bold">
+                                                        {quiz.total_duration_minutes || 45} mins • Self-paced
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div className="mt-4 sm:mt-0 flex gap-4 shrink-0">
+                                                {isCompleted ? (
+                                                    <button
+                                                        onClick={() => router.push(`/quiz/static/${quiz.id}?review=1`)}
+                                                        className="w-40 py-2 border-2 border-brand-light rounded-xl text-center font-mono font-bold text-brand hover:bg-brand-light transition"
+                                                    >
+                                                        Review Quiz
+                                                    </button>
+                                                ) : isClosed ? (
+                                                    <div className="w-40 py-2 border-2 border-brand-light bg-brand-light rounded-xl text-center font-mono font-bold text-black opacity-70">
+                                                        Closed
+                                                    </div>
+                                                ) : (
+                                                    <button
+                                                        onClick={() => router.push(`/quiz/static/${quiz.id}`)}
+                                                        className="w-40 py-2 border-2 border-brand-light bg-brand rounded-xl text-center font-mono font-bold text-black hover:bg-[#c47155] transition"
+                                                    >
+                                                        Take Quiz
+                                                    </button>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 );
