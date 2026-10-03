@@ -1,9 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { BarChart3, FilePlus2, Home, Loader2, LogOut } from 'lucide-react';
+import { BarChart3, FilePlus2, Home, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
+import DashboardNavbar from '@/components/DashboardNavbar';
+import DashboardLoading from '@/components/DashboardLoading';
+import { getCachedProfile, setCachedProfile, markClientHydrated, getCachedProfileDirect } from '@/lib/authCache';
 
 type AnalyticsSession = {
   id: string;
@@ -14,8 +17,9 @@ type AnalyticsSession = {
 
 export default function TeacherAnalyticsIndex() {
   const router = useRouter();
+  const cached = getCachedProfile();
   const [loading, setLoading] = useState(true);
-  const [userName, setUserName] = useState('');
+  const [userName, setUserName] = useState(cached?.full_name || '');
   const [sessions, setSessions] = useState<AnalyticsSession[]>([]);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
 
@@ -25,6 +29,12 @@ export default function TeacherAnalyticsIndex() {
   }, []);
 
   useEffect(() => {
+    markClientHydrated();
+    const storedProfile = getCachedProfileDirect();
+    if (storedProfile) {
+      setUserName(storedProfile.full_name);
+    }
+
     async function loadSessions() {
       const {
         data: { user },
@@ -45,6 +55,11 @@ export default function TeacherAnalyticsIndex() {
       }
 
       setUserName(profile.full_name);
+      setCachedProfile({
+        id: user.id,
+        full_name: profile.full_name,
+        role: profile.role,
+      });
       const { data: sessionData, error } = await supabase
         .from('quiz_sessions')
         .select('id, status, created_at, quizzes!inner(title, type, teacher_id, available_until)')
@@ -54,7 +69,27 @@ export default function TeacherAnalyticsIndex() {
       if (error) {
         console.error('Failed to load analytics sessions', error);
       } else {
-        setSessions((sessionData || []) as AnalyticsSession[]);
+        // Filter out duplicate or orphaned 'waiting' sessions for competitive quizzes:
+        // When a competitive quiz has a played session (status != 'waiting'), any unplayed 'waiting'
+        // lobby for that same quiz is excluded so duplicate entries never appear in Analytics.
+        const validSessions = (sessionData || []).filter((session: any) => {
+          const quiz = Array.isArray(session.quizzes) ? session.quizzes[0] : session.quizzes;
+          if (quiz?.type === 'static') return true;
+
+          // For competitive quizzes:
+          if (session.status !== 'waiting') return true;
+
+          // If status is 'waiting', only show it if there is NO played session for the same quiz title
+          const hasPlayedSession = (sessionData || []).some((other: any) => {
+            if (other.id === session.id) return false;
+            const otherQuiz = Array.isArray(other.quizzes) ? other.quizzes[0] : other.quizzes;
+            return otherQuiz?.title === quiz?.title && other.status !== 'waiting';
+          });
+
+          return !hasPlayedSession;
+        });
+
+        setSessions(validSessions as AnalyticsSession[]);
       }
       setLoading(false);
     }
@@ -63,54 +98,26 @@ export default function TeacherAnalyticsIndex() {
   }, [router]);
 
   const handleSignOut = async () => {
+    setCachedProfile(null);
     await supabase.auth.signOut();
     router.push('/auth');
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-bg">
-        <Loader2 className="w-8 h-8 text-brand animate-spin" />
-      </div>
-    );
-  }
-
   return (
-    <div className="min-h-screen bg-bg pb-12">
-      <nav className="border-b border-brand-light px-12 py-6 flex justify-between items-center sticky top-0 z-10 bg-bg">
-        <div className="flex flex-col items-start gap-1">
-          <span className="text-4xl font-black text-brand tracking-tighter">quizeee</span>
-          <span className="bg-brand-light text-black text-xs px-3 py-1 rounded-full font-medium tracking-wide">
-            Teachers Hub
-          </span>
-        </div>
-        <div className="flex items-center gap-6">
-          <button
-            onClick={() => router.push('/dashboard/teacher')}
-            className="rounded-full bg-white px-6 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 transition"
-          >
-            Dashboard
-          </button>
-          <button
-            onClick={() => router.push('/dashboard/teacher/analytics')}
-            className="rounded-full bg-brand-light px-6 py-2.5 text-sm font-medium text-black transition"
-          >
-            Analytics
-          </button>
-          <div className="flex items-center gap-2 ml-4">
-            <span className="text-black font-bold text-sm">{userName || 'Name'}</span>
-            <button
-              onClick={handleSignOut}
-              className="ml-2 flex items-center text-sm text-gray-500 hover:text-red-600 transition"
-              title="Sign Out"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </nav>
+    <div className="min-h-screen bg-[#fff5f0] text-foreground font-mono relative flex flex-col selection:bg-[#E86F47] selection:text-white pb-12">
+      {/* Shared Top Navigation */}
+      <DashboardNavbar
+        role="teacher"
+        userName={userName}
+        onSignOut={handleSignOut}
+        activeTab="analytics"
+      />
 
-      <main className="max-w-6xl mx-auto p-6 mt-4">
+      {/* Main Content Area */}
+      {loading && sessions.length === 0 ? (
+        <DashboardLoading />
+      ) : (
+        <main className="max-w-6xl w-full mx-auto p-6 mt-4 relative z-10">
         <h1 className="text-5xl font-bold font-mono tracking-tighter text-black">Quiz Analytics</h1>
         <p className="mt-2 text-gray-600 font-mono">Choose a quiz session to view classroom performance.</p>
 
@@ -165,6 +172,7 @@ export default function TeacherAnalyticsIndex() {
           </div>
         )}
       </main>
+      )}
     </div>
   );
 }

@@ -1,14 +1,19 @@
 'use client';
 import QuizCreator from '@/components/QuizCreator';
+import DashboardNavbar from '@/components/DashboardNavbar';
+import DashboardBackground from '@/components/DashboardBackground';
+import DashboardLoading from '@/components/DashboardLoading';
+import { getCachedProfile, setCachedProfile, markClientHydrated, getCachedProfileDirect } from '@/lib/authCache';
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
-import { BookOpen, LogOut, Home, FilePlus2, BarChart3 } from 'lucide-react';
+import { BookOpen, Home, FilePlus2, BarChart3 } from 'lucide-react';
 
 export default function TeacherDashboard() {
-    const [loading, setLoading] = useState(true);
-    const [userName, setUserName] = useState('');
-    const [userId, setUserId] = useState('');
+    const cached = getCachedProfile();
+    const [loading, setLoading] = useState(!cached);
+    const [userName, setUserName] = useState(cached?.full_name || '');
+    const [userId, setUserId] = useState(cached?.id || '');
     const [quizzes, setQuizzes] = useState<any[]>([]);
     const [currentTime, setCurrentTime] = useState(() => Date.now());
     const [activeTab, setActiveTab] = useState<'active'|'completed'>('active');
@@ -86,6 +91,13 @@ export default function TeacherDashboard() {
     }, []);
 
     useEffect(() => {
+        markClientHydrated();
+        const storedProfile = getCachedProfileDirect();
+        if (storedProfile) {
+            setUserName(storedProfile.full_name);
+            setUserId(storedProfile.id);
+        }
+
         async function checkAuth() {
             const { data: { session } } = await supabase.auth.getSession();
 
@@ -107,6 +119,11 @@ export default function TeacherDashboard() {
 
             setUserName(profile.full_name);
             setUserId(session.user.id);
+            setCachedProfile({
+                id: session.user.id,
+                full_name: profile.full_name,
+                role: profile.role,
+            });
             await fetchQuizzes(session.user.id);
             setLoading(false);
         }
@@ -115,6 +132,7 @@ export default function TeacherDashboard() {
     }, [router]);
 
     const handleSignOut = async () => {
+        setCachedProfile(null);
         await supabase.auth.signOut();
         router.push('/auth');
     };
@@ -127,52 +145,24 @@ export default function TeacherDashboard() {
         }
     };
 
-    if (loading) {
-        return (
-            <div className="min-h-screen flex items-center justify-center bg-gray-50">
-                <p className="text-gray-500 font-medium animate-pulse">Verifying teacher authorization...</p>
-            </div>
-        );
-    }
-
     return (
-        <div className="min-h-screen bg-bg pb-12">
-            {/* Top Navigation */}
-            <nav className="border-b border-brand-light px-12 py-6 flex justify-between items-center sticky top-0 z-10 bg-bg">
-                <div className="flex flex-col items-start gap-1">
-                    <span className="text-4xl font-black text-brand tracking-tighter">quizeee</span>
-                    <span className="bg-brand-light text-black text-xs px-3 py-1 rounded-full font-medium tracking-wide">
-                        Teachers Hub
-                    </span>
-                </div>
-                <div className="flex items-center gap-6">
-                    <button
-                        onClick={() => router.push('/dashboard/teacher')}
-                        className="rounded-full bg-brand-light px-6 py-2.5 text-sm font-medium text-black transition"
-                    >
-                        Dashboard
-                    </button>
-                    <button
-                        onClick={() => router.push('/dashboard/teacher/analytics')}
-                        className="rounded-full bg-white px-6 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 transition"
-                    >
-                        Analytics
-                    </button>
-                    <div className="flex items-center gap-2 ml-4">
-                        <span className="text-black font-bold text-sm">{userName || 'Name'}</span>
-                        <button
-                            onClick={handleSignOut}
-                            className="ml-2 flex items-center text-sm text-gray-500 hover:text-red-600 transition"
-                            title="Sign Out"
-                        >
-                            <LogOut className="w-4 h-4" />
-                        </button>
-                    </div>
-                </div>
-            </nav>
+        <div className="min-h-screen bg-[#fff5f0] text-foreground font-mono relative flex flex-col selection:bg-[#E86F47] selection:text-white pb-12">
+            {/* Live Circuit & Floating Shapes Wallpaper */}
+            <DashboardBackground />
+
+            {/* Shared Top Navigation */}
+            <DashboardNavbar
+                role="teacher"
+                userName={userName}
+                onSignOut={handleSignOut}
+                activeTab="dashboard"
+            />
 
             {/* Main Content Area */}
-            <main className="max-w-6xl mx-auto p-6 space-y-8 mt-4">
+            {loading && quizzes.length === 0 ? (
+                <DashboardLoading />
+            ) : (
+                <main className="max-w-6xl w-full mx-auto p-6 space-y-8 mt-4 relative z-10">
                 {/* Quiz Creator Component */}
                 <QuizCreator teacherId={userId} onComplete={() => fetchQuizzes(userId)} />
 
@@ -211,9 +201,9 @@ export default function TeacherDashboard() {
                                 return activeTab === 'completed' ? isCompleted : !isCompleted;
                             }).map((quiz) => {
                                 return (
-                                    <div key={quiz.id} className="bg-transparent border-b border-brand-light border-dashed transition-all duration-200">
+                                    <div key={quiz.id} className="bg-white/85 backdrop-blur-md border border-brand-light/80 rounded-2xl shadow-xs hover:shadow-md hover:border-[#E86F47]/40 transition-all duration-200 overflow-hidden">
                                         <div 
-                                            className="p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center cursor-pointer hover:bg-brand-lightest/50 rounded-xl gap-4"
+                                            className="p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center cursor-pointer hover:bg-brand-lightest/30 gap-4"
                                             onClick={() => handleSelectQuiz(quiz)}
                                         >
                                             <div className="flex flex-col gap-2 min-w-0 flex-1">
@@ -247,6 +237,7 @@ export default function TeacherDashboard() {
                     )}
                 </div>
             </main>
+            )}
         </div>
     );
 }

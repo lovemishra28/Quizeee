@@ -3,18 +3,30 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
-import { LogOut, Play, Hash } from 'lucide-react';
+import { Play, Hash } from 'lucide-react';
+import DashboardNavbar from '@/components/DashboardNavbar';
+import DashboardBackground from '@/components/DashboardBackground';
+import DashboardLoading from '@/components/DashboardLoading';
+import { getCachedProfile, setCachedProfile, markClientHydrated, getCachedProfileDirect } from '@/lib/authCache';
 
 export default function StudentDashboard() {
-    const [loading, setLoading] = useState(true);
-    const [userName, setUserName] = useState('');
-    const [userId, setUserId] = useState('');
+    const cached = getCachedProfile();
+    const [loading, setLoading] = useState(!cached);
+    const [userName, setUserName] = useState(cached?.full_name || '');
+    const [userId, setUserId] = useState(cached?.id || '');
     const [roomCode, setRoomCode] = useState('');
     const [staticQuizzes, setStaticQuizzes] = useState<any[]>([]);
     const [completedQuizIds, setCompletedQuizIds] = useState<Set<string>>(new Set());
     const router = useRouter();
 
     useEffect(() => {
+        markClientHydrated();
+        const storedProfile = getCachedProfileDirect();
+        if (storedProfile) {
+            setUserName(storedProfile.full_name);
+            setUserId(storedProfile.id);
+        }
+
         async function checkAuth() {
             const { data: { session } } = await supabase.auth.getSession();
 
@@ -36,6 +48,11 @@ export default function StudentDashboard() {
 
             setUserName(profile.full_name);
             setUserId(session.user.id);
+            setCachedProfile({
+                id: session.user.id,
+                full_name: profile.full_name,
+                role: profile.role,
+            });
 
             // Fetch static quizzes
             const { data: quizzesData } = await supabase
@@ -106,44 +123,28 @@ export default function StudentDashboard() {
     };
 
     const handleSignOut = async () => {
+        setCachedProfile(null);
         await supabase.auth.signOut();
         router.push('/auth');
     };
 
-    if (loading) {
-        return (
-            <div className="min-h-screen flex items-center justify-center bg-bg">
-                <p className="text-gray-500 font-medium font-mono">Verifying student authorization...</p>
-            </div>
-        );
-    }
-
     return (
-        <div className="min-h-screen bg-bg">
-            {/* Top Navigation */}
-            <nav className="border-b border-brand-light px-12 py-6 flex justify-between items-center sticky top-0 z-10 bg-bg">
-                <div className="flex flex-col items-start gap-1">
-                    <span className="text-4xl font-black text-brand tracking-tighter">quizeee</span>
-                    <span className="bg-brand-light text-black text-xs px-3 py-1 rounded-full font-medium tracking-wide">
-                        Student Hub
-                    </span>
-                </div>
-                <div className="flex items-center gap-6">
-                    <div className="flex items-center gap-2 ml-4">
-                        <span className="text-black font-bold text-sm">{userName || 'Student'}</span>
-                        <button
-                            onClick={handleSignOut}
-                            className="ml-2 flex items-center text-sm text-gray-500 hover:text-red-600 transition"
-                            title="Sign Out"
-                        >
-                            <LogOut className="w-4 h-4" />
-                        </button>
-                    </div>
-                </div>
-            </nav>
+        <div className="min-h-screen bg-[#fff5f0] text-foreground font-mono relative flex flex-col selection:bg-[#E86F47] selection:text-white pb-12">
+            {/* Live Circuit & Floating Shapes Wallpaper */}
+            <DashboardBackground />
+
+            {/* Shared Top Navigation */}
+            <DashboardNavbar
+                role="student"
+                userName={userName}
+                onSignOut={handleSignOut}
+            />
 
             {/* Main Content Area */}
-            <main className="max-w-6xl mx-auto p-6 mt-4">
+            {loading && staticQuizzes.length === 0 ? (
+                <DashboardLoading />
+            ) : (
+                <main className="max-w-6xl w-full mx-auto p-6 mt-4 relative z-10">
                 <div className="bg-brand-lightest p-8 rounded-[2rem] border border-brand-light shadow-sm text-center max-w-2xl mx-auto mb-12">
                     <div className="inline-flex p-4 bg-brand-light text-brand rounded-full mb-4">
                         <Hash className="w-8 h-8" />
@@ -160,7 +161,7 @@ export default function StudentDashboard() {
                             value={roomCode}
                             onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
                             placeholder="e.g. 849201"
-                            className="w-full px-6 py-4 text-center text-3xl font-mono tracking-widest border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none uppercase bg-white text-black"
+                            className="w-full px-6 py-4 text-center text-3xl font-mono tracking-widest border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none uppercase bg-white text-[#1c1917] font-bold placeholder:text-[#8c827a] placeholder:font-normal"
                         />
                         <button
                             type="submit"
@@ -185,8 +186,8 @@ export default function StudentDashboard() {
                                 const isCompleted = completedQuizIds.has(quiz.id);
                                 const isClosed = quiz.available_until && Date.now() >= new Date(quiz.available_until).getTime();
                                 return (
-                                    <div key={quiz.id} className="bg-transparent border-b border-brand-light border-dashed transition-all duration-200 block text-left">
-                                        <div className="p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center hover:bg-brand-lightest/50 rounded-xl gap-4">
+                                    <div key={quiz.id} className="bg-white/85 backdrop-blur-md border border-brand-light/80 rounded-2xl shadow-xs hover:shadow-md hover:border-[#E86F47]/40 transition-all duration-200 block text-left overflow-hidden">
+                                        <div className="p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center hover:bg-brand-lightest/30 gap-4">
                                             <div className="flex flex-col gap-2 min-w-0 flex-1">
                                                 <h4 className="text-3xl font-normal font-mono text-black truncate" title={quiz.title}>{quiz.title}</h4>
                                                 <div className="flex items-center space-x-4">
@@ -224,6 +225,7 @@ export default function StudentDashboard() {
                     )}
                 </div>
             </main>
+            )}
         </div>
     );
 }

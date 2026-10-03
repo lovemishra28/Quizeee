@@ -1,21 +1,109 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { processStudyMaterial } from '@/actions/generateQuiz';
-import { UploadCloud, Loader2, CheckCircle, Trash2, Plus } from 'lucide-react';
+import { UploadCloud, Loader2, CheckCircle, Trash2, Plus, Calendar, Clock } from 'lucide-react';
+
+const formatForInput = (d: Date) => {
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+const formatDisplayDate = (dateStr: string) => {
+    if (!dateStr) return '';
+    try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return '';
+        return d.toLocaleString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+        });
+    } catch {
+        return '';
+    }
+};
+
+const getTodayPreset = () => {
+    const from = new Date();
+    const until = new Date();
+    until.setHours(23, 59, 0, 0);
+    return {
+        from: formatForInput(from),
+        until: formatForInput(until),
+    };
+};
+
+const getTomorrowPreset = () => {
+    const from = new Date();
+    from.setDate(from.getDate() + 1);
+    from.setHours(8, 0, 0, 0);
+    const until = new Date();
+    until.setDate(until.getDate() + 1);
+    until.setHours(23, 59, 0, 0);
+    return {
+        from: formatForInput(from),
+        until: formatForInput(until),
+    };
+};
 
 export default function QuizCreator({ teacherId, onComplete }: { teacherId: string, onComplete?: () => void }) {
     const [file, setFile] = useState<File | null>(null);
     const [title, setTitle] = useState('');
     const [questionCount, setQuestionCount] = useState(5);
     const [type, setType] = useState('static');
+    const [schedulePreset, setSchedulePreset] = useState<'today' | 'tomorrow' | 'custom'>('today');
     const [availableFrom, setAvailableFrom] = useState('');
     const [availableUntil, setAvailableUntil] = useState('');
+    const [totalDurationMinutes, setTotalDurationMinutes] = useState<number>(45);
     const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState('');
     const [generatedQuestions, setGeneratedQuestions] = useState<any[]>([]);
     const [isReviewing, setIsReviewing] = useState(false);
+
+    const fromInputRef = useRef<HTMLInputElement>(null);
+    const untilInputRef = useRef<HTMLInputElement>(null);
+
+    // Auto-populate 'Today' preset when static mode is active and empty
+    useEffect(() => {
+        if (type === 'static' && (!availableFrom || !availableUntil)) {
+            const { from, until } = getTodayPreset();
+            setAvailableFrom(from);
+            setAvailableUntil(until);
+            setSchedulePreset('today');
+        }
+    }, [type]);
+
+    const applyPreset = (preset: 'today' | 'tomorrow') => {
+        setSchedulePreset(preset);
+        if (preset === 'today') {
+            const { from, until } = getTodayPreset();
+            setAvailableFrom(from);
+            setAvailableUntil(until);
+        } else if (preset === 'tomorrow') {
+            const { from, until } = getTomorrowPreset();
+            setAvailableFrom(from);
+            setAvailableUntil(until);
+        }
+    };
+
+    const openCalendar = (ref: React.RefObject<HTMLInputElement | null>) => {
+        try {
+            const input = ref.current;
+            if (input) {
+                if (typeof (input as any).showPicker === 'function') {
+                    (input as any).showPicker();
+                } else {
+                    input.focus();
+                }
+            }
+        } catch {
+            ref.current?.focus();
+        }
+    };
 
     const handleUpload = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -40,16 +128,27 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
 
             const aiResponse = await processStudyMaterial(formData);
 
-            if (!aiResponse.success) throw new Error(aiResponse.error);
+            if (!aiResponse.success || !aiResponse.questions) {
+                throw new Error(aiResponse.error || 'Failed to generate questions');
+            }
 
             // 2. Load the questions into state and switch to the review screen
             setGeneratedQuestions(aiResponse.questions);
             setIsReviewing(true);
-            setStatus('Questions generated successfully! Please review them.');
+            setStatus(
+                aiResponse.isMultimodal
+                    ? 'Questions generated successfully from presentation slides using AI Vision! Please review them.'
+                    : 'Questions generated successfully! Please review them.'
+            );
 
         } catch (error: any) {
             console.error(error);
-            setStatus(`Error: ${error.message}`);
+            const msg = error.message || 'Failed to process document';
+            if (msg.toLowerCase().includes('fetch')) {
+                setStatus('Error: Upload interrupted or server took too long. Please try again.');
+            } else {
+                setStatus(`Error: ${msg}`);
+            }
         } finally {
             setLoading(false);
         }
@@ -103,9 +202,10 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                 .insert({
                     teacher_id: teacherId,
                     title: title,
-                    type: type, 
+                    type: type,
                     available_from: type === 'static' ? new Date(availableFrom).toISOString() : null,
                     available_until: type === 'static' ? new Date(availableUntil).toISOString() : null,
+                    total_duration_minutes: type === 'static' ? Math.max(1, Number(totalDurationMinutes) || 45) : null,
                 })
                 .select()
                 .single();
@@ -135,8 +235,11 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                 setStatus('');
                 setFile(null);
                 setTitle('');
-                setAvailableFrom('');
-                setAvailableUntil('');
+                const { from, until } = getTodayPreset();
+                setAvailableFrom(from);
+                setAvailableUntil(until);
+                setSchedulePreset('today');
+                setTotalDurationMinutes(45);
                 setGeneratedQuestions([]);
                 setIsReviewing(false);
                 if (onComplete) onComplete();
@@ -151,18 +254,26 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
 
     if (isReviewing) {
         return (
-            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm max-h-[80vh] overflow-y-auto">
-                <h3 className="text-xl font-bold text-gray-900 mb-4">Review Generated Questions</h3>
-                <p className="text-gray-500 mb-6 text-sm">Make any necessary edits before saving to the database.</p>
-                
-                <div className="space-y-8">
+            <div className="bg-brand-lightest p-8 sm:p-10 rounded-[2rem] border-2 border-brand-light shadow-md max-h-[85vh] overflow-y-auto mb-12">
+                <div className="flex justify-between items-start mb-6">
+                    <div>
+                        <p className="text-brand font-bold font-mono uppercase tracking-widest text-sm mb-1">Question Review</p>
+                        <h3 className="text-3xl sm:text-4xl font-black font-mono tracking-tight text-black">Review Generated Questions</h3>
+                        <p className="text-[#8c827a] font-mono text-base mt-1">Make any necessary edits or adjustments before saving to the database.</p>
+                    </div>
+                    <span className="px-4 py-2 rounded-xl bg-white border-2 border-brand-light font-mono font-black text-black text-sm shadow-sm shrink-0">
+                        {generatedQuestions.length} Questions
+                    </span>
+                </div>
+
+                <div className="space-y-6">
                     {generatedQuestions.map((q, qIndex) => (
-                        <div key={qIndex} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
-                            <div className="flex justify-between items-center mb-2">
-                                <label className="block text-sm font-bold text-gray-700">Question {qIndex + 1}</label>
+                        <div key={qIndex} className="p-6 bg-white/90 backdrop-blur-md rounded-2xl border-2 border-brand-light shadow-sm">
+                            <div className="flex justify-between items-center mb-3">
+                                <label className="block text-base font-bold font-mono text-black">Question {qIndex + 1}</label>
                                 <button
                                     onClick={() => handleDeleteQuestion(qIndex)}
-                                    className="text-red-500 hover:text-red-700 p-1"
+                                    className="text-red-500 hover:text-red-700 p-1.5 rounded-lg hover:bg-red-50 transition"
                                     title="Delete Question"
                                     type="button"
                                 >
@@ -172,26 +283,33 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                             <textarea
                                 value={q.question_text}
                                 onChange={(e) => handleQuestionChange(qIndex, e.target.value)}
-                                className="w-full px-4 py-2 mb-4 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none resize-none"
+                                className="w-full px-5 py-3 mb-4 border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none resize-none bg-white text-[#1c1917] font-mono font-bold text-lg leading-relaxed shadow-sm"
                                 rows={2}
                             />
-                            
+
                             <div className="space-y-3">
                                 {q.options.map((option: string, oIndex: number) => (
                                     <div key={oIndex} className="flex items-center gap-3">
-                                        <input
-                                            type="radio"
-                                            name={`correct-${qIndex}`}
-                                            checked={q.correct_option_index === oIndex}
-                                            onChange={() => handleCorrectAnswerChange(qIndex, oIndex)}
-                                            className="w-5 h-5 text-indigo-600 focus:ring-indigo-500"
-                                        />
-                                        <input
-                                            type="text"
-                                            value={option}
-                                            onChange={(e) => handleOptionChange(qIndex, oIndex, e.target.value)}
-                                            className="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-                                        />
+                                        <label className="flex items-center cursor-pointer">
+                                            <input
+                                                type="radio"
+                                                name={`correct-${qIndex}`}
+                                                checked={q.correct_option_index === oIndex}
+                                                onChange={() => handleCorrectAnswerChange(qIndex, oIndex)}
+                                                className="w-5 h-5 accent-[#E86F47] cursor-pointer"
+                                            />
+                                        </label>
+                                        <div className="flex-1 flex items-center bg-white border-2 border-brand-light rounded-xl px-4 py-2.5 focus-within:border-brand shadow-sm">
+                                            <span className="font-mono font-black text-brand mr-3 text-lg">
+                                                {String.fromCharCode(65 + oIndex)}.
+                                            </span>
+                                            <input
+                                                type="text"
+                                                value={option}
+                                                onChange={(e) => handleOptionChange(qIndex, oIndex, e.target.value)}
+                                                className="w-full outline-none bg-transparent text-[#1c1917] font-mono font-bold text-base"
+                                            />
+                                        </div>
                                     </div>
                                 ))}
                             </div>
@@ -199,16 +317,17 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                     ))}
                 </div>
 
-                <div className="mt-8 flex flex-col sm:flex-row gap-4">
+                <div className="mt-8 flex flex-col sm:flex-row gap-4 pt-4 border-t-2 border-brand-light/60">
                     <button
                         onClick={() => setIsReviewing(false)}
-                        className="flex-1 py-3 bg-white border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition"
+                        className="flex-1 py-4 bg-white border-2 border-brand-light text-black font-bold font-mono text-lg rounded-xl hover:bg-brand-lightest transition shadow-sm"
+                        type="button"
                     >
                         Cancel & Discard
                     </button>
                     <button
                         onClick={handleAddQuestion}
-                        className="flex-1 py-3 bg-indigo-100 text-indigo-700 font-semibold rounded-lg hover:bg-indigo-200 transition flex items-center justify-center gap-2"
+                        className="flex-1 py-4 bg-brand-light text-black border-2 border-brand-light hover:border-brand font-bold font-mono text-lg rounded-xl transition flex items-center justify-center gap-2 shadow-sm"
                         type="button"
                     >
                         <Plus className="w-5 h-5" /> Add Question
@@ -216,7 +335,8 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                     <button
                         onClick={handleSaveQuiz}
                         disabled={loading}
-                        className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-semibold rounded-lg transition"
+                        className="flex-1 py-4 bg-brand hover:bg-[#c47155] disabled:bg-brand-light text-black font-black font-mono text-xl rounded-xl transition shadow-sm"
+                        type="button"
                     >
                         {loading ? 'Saving to Database...' : 'Confirm & Save Quiz'}
                     </button>
@@ -256,7 +376,7 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                             value={title}
                             onChange={(e) => setTitle(e.target.value)}
                             placeholder="Title...."
-                            className="w-full px-6 py-6 border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none bg-white text-2xl font-light placeholder:text-gray-400"
+                            className="w-full px-6 py-6 border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none bg-white text-2xl font-mono font-bold text-[#1c1917] placeholder:text-[#8c827a] placeholder:font-normal"
                         />
                         <input
                             type="number"
@@ -268,16 +388,16 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                                 setQuestionCount(isNaN(val) ? 0 : val);
                             }}
                             placeholder="No. of Questions"
-                            className="w-full px-6 py-6 border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none bg-white text-2xl font-light placeholder:text-gray-400"
+                            className="w-full px-6 py-6 border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none bg-white text-2xl font-mono font-bold text-[#1c1917] placeholder:text-[#8c827a] placeholder:font-normal"
                         />
                     </div>
-                    
+
                     <div className="w-full sm:w-[350px]">
                         <label className="flex flex-col items-center justify-center w-full h-full min-h-[160px] border-2 border-brand-light rounded-xl cursor-pointer bg-white hover:bg-gray-50 transition">
                             <div className="flex flex-col items-center justify-center p-8">
                                 <UploadCloud className="w-10 h-10 text-black mb-4" />
                                 <p className="text-sm text-black text-center">
-                                    <span className="font-bold">Click to Upload</span> or drag<br/>and drop
+                                    <span className="font-bold">Click to Upload</span> or drag<br />and drop
                                 </p>
                                 {file && <p className="text-xs text-brand mt-4 font-bold">{file.name}</p>}
                             </div>
@@ -292,27 +412,184 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                 </div>
 
                 {type === 'static' && (
-                    <div className="grid gap-4 sm:grid-cols-2 rounded-xl bg-white/50 border border-brand-light p-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Available from</label>
-                            <input
-                                type="datetime-local"
-                                required
-                                value={availableFrom}
-                                onChange={(e) => setAvailableFrom(e.target.value)}
-                                className="w-full px-4 py-3 border-2 border-brand-light rounded-lg focus:ring-2 focus:ring-brand outline-none bg-white"
-                            />
+                    <div className="rounded-2xl bg-white/80 border-2 border-brand-light p-6 shadow-sm space-y-5">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div>
+                                <label className="block text-base font-mono font-bold text-black">
+                                    Quiz Availability Window
+                                </label>
+                                <p className="text-xs font-mono text-[#8c827a] mt-0.5">
+                                    Select quick dates or open the calendar to schedule
+                                </p>
+                            </div>
+
+                            {/* Quick Presets: Today, Tomorrow, Others */}
+                            <div className="inline-flex p-1.5 bg-[#fbf5f0] border-2 border-brand-light rounded-xl gap-1.5 self-start sm:self-auto">
+                                <button
+                                    type="button"
+                                    onClick={() => applyPreset('today')}
+                                    className={`px-4 py-1.5 rounded-lg font-mono text-sm font-bold transition flex items-center gap-1.5 ${schedulePreset === 'today'
+                                            ? 'bg-brand text-black shadow-sm'
+                                            : 'text-[#5c544e] hover:text-black hover:bg-white/60'
+                                        }`}
+                                >
+                                    Today
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => applyPreset('tomorrow')}
+                                    className={`px-4 py-1.5 rounded-lg font-mono text-sm font-bold transition flex items-center gap-1.5 ${schedulePreset === 'tomorrow'
+                                            ? 'bg-brand text-black shadow-sm'
+                                            : 'text-[#5c544e] hover:text-black hover:bg-white/60'
+                                        }`}
+                                >
+                                    Tomorrow
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setSchedulePreset('custom');
+                                        setTimeout(() => openCalendar(fromInputRef), 50);
+                                    }}
+                                    className={`px-4 py-1.5 rounded-lg font-mono text-sm font-bold transition flex items-center gap-1.5 ${schedulePreset === 'custom'
+                                            ? 'bg-brand text-black shadow-sm'
+                                            : 'text-[#5c544e] hover:text-black hover:bg-white/60'
+                                        }`}
+                                >
+                                    <Calendar className="w-4 h-4 text-brand" />
+                                    Others
+                                </button>
+                            </div>
                         </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Available until</label>
-                            <input
-                                type="datetime-local"
-                                required
-                                value={availableUntil}
-                                onChange={(e) => setAvailableUntil(e.target.value)}
-                                className="w-full px-4 py-3 border-2 border-brand-light rounded-lg focus:ring-2 focus:ring-brand outline-none bg-white"
-                            />
+
+                        {/* Date & Time Pickers with Direct Calendar Popout */}
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <div>
+                                <label className="block text-sm font-mono font-bold text-[#1c1917] mb-1.5">
+                                    Available from
+                                </label>
+                                <div className="relative flex items-center">
+                                    <input
+                                        ref={fromInputRef}
+                                        type="datetime-local"
+                                        required
+                                        value={availableFrom}
+                                        onChange={(e) => {
+                                            setAvailableFrom(e.target.value);
+                                            setSchedulePreset('custom');
+                                        }}
+                                        style={{ colorScheme: 'light' }}
+                                        className="w-full px-4 py-3 pr-24 border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none bg-white font-mono text-base font-bold text-[#1c1917] cursor-pointer [&::-webkit-calendar-picker-indicator]:hidden"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => openCalendar(fromInputRef)}
+                                        className="absolute right-2 px-2.5 py-1.5 rounded-lg bg-brand/15 hover:bg-brand text-black font-mono text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                                        title="Open calendar picker"
+                                    >
+                                        <Calendar className="w-3.5 h-3.5" />
+                                        <span>Pick</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-mono font-bold text-[#1c1917] mb-1.5">
+                                    Available until
+                                </label>
+                                <div className="relative flex items-center">
+                                    <input
+                                        ref={untilInputRef}
+                                        type="datetime-local"
+                                        required
+                                        value={availableUntil}
+                                        onChange={(e) => {
+                                            setAvailableUntil(e.target.value);
+                                            setSchedulePreset('custom');
+                                        }}
+                                        style={{ colorScheme: 'light' }}
+                                        className="w-full px-4 py-3 pr-24 border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none bg-white font-mono text-base font-bold text-[#1c1917] cursor-pointer [&::-webkit-calendar-picker-indicator]:hidden"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => openCalendar(untilInputRef)}
+                                        className="absolute right-2 px-2.5 py-1.5 rounded-lg bg-brand/15 hover:bg-brand text-black font-mono text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                                        title="Open calendar picker"
+                                    >
+                                        <Calendar className="w-3.5 h-3.5" />
+                                        <span>Pick</span>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
+
+                        {/* Static Quiz Duration (Timer) Setting */}
+                        <div className="pt-3 border-t border-brand-light/60">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                <div>
+                                    <label className="flex items-center gap-2 text-sm font-mono font-bold text-[#1c1917]">
+                                        <Clock className="w-4 h-4 text-brand" />
+                                        Quiz Time Limit (Timer)
+                                    </label>
+                                    <p className="text-xs font-mono text-[#8c827a] mt-0.5">
+                                        Each student gets this countdown timer once they begin
+                                    </p>
+                                </div>
+
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    {[15, 30, 45, 60, 90].map((mins) => (
+                                        <button
+                                            key={mins}
+                                            type="button"
+                                            onClick={() => setTotalDurationMinutes(mins)}
+                                            className={`px-3 py-1.5 rounded-lg font-mono text-sm font-bold transition cursor-pointer ${
+                                                totalDurationMinutes === mins
+                                                    ? 'bg-brand text-black shadow-sm'
+                                                    : 'bg-white border-2 border-brand-light text-[#5c544e] hover:text-black hover:bg-brand-light/20'
+                                            }`}
+                                        >
+                                            {mins}m
+                                        </button>
+                                    ))}
+
+                                    <div className="flex items-center gap-1.5 ml-1">
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="360"
+                                            value={totalDurationMinutes || ''}
+                                            onChange={(e) => {
+                                                const val = parseInt(e.target.value, 10);
+                                                setTotalDurationMinutes(isNaN(val) ? 0 : val);
+                                            }}
+                                            className="w-16 px-2 py-1.5 border-2 border-brand-light rounded-lg font-mono text-sm font-bold text-center bg-white outline-none focus:ring-2 focus:ring-brand text-[#1c1917]"
+                                        />
+                                        <span className="text-xs font-mono font-bold text-[#8c827a]">mins</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Helpful Active Summary Badge */}
+                        {availableFrom && availableUntil && (
+                            <div className="px-4 py-2.5 rounded-xl bg-brand-light/20 border border-brand-light flex flex-wrap items-center justify-between gap-2 text-xs font-mono text-[#5c544e]">
+                                <span className="flex items-center gap-2">
+                                    <span className="w-2 h-2 rounded-full bg-[#E86F47] animate-pulse"></span>
+                                    <span>
+                                        Active window: <strong className="text-black">{formatDisplayDate(availableFrom)}</strong> to <strong className="text-black">{formatDisplayDate(availableUntil)}</strong>
+                                    </span>
+                                </span>
+                                <div className="flex items-center gap-2">
+                                    <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-white border border-brand-light font-bold text-black shadow-2xs">
+                                        <Clock className="w-3 h-3 text-brand" />
+                                        {totalDurationMinutes || 45} mins timer
+                                    </span>
+                                    <span className="font-bold uppercase tracking-wider text-brand px-2.5 py-0.5 rounded-lg bg-white border border-brand-light shadow-2xs">
+                                        {schedulePreset === 'today' ? 'Today Preset' : schedulePreset === 'tomorrow' ? 'Tomorrow Preset' : 'Custom Schedule'}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
 

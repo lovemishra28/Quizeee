@@ -3,8 +3,10 @@
 import { useEffect, useState, use, useRef } from 'react';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
-import { useRouter } from 'next/navigation';
-import { Loader2, MonitorPlay, Trophy } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Loader2, MonitorPlay, Trophy, Clock, Zap, ArrowLeft, Gamepad2 } from 'lucide-react';
+import DashboardBackground from '@/components/DashboardBackground';
+import { joinInstantQuizAction } from '@/actions/instantQuiz';
 
 type LiveSession = {
   id: string;
@@ -37,11 +39,17 @@ type AnswerFeedback = {
 export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode: string }> }) {
   const { roomCode } = use(params);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const isInstant = searchParams.get('instant') === 'true';
   
   const [session, setSession] = useState<LiveSession | null>(null);
   const [studentId, setStudentId] = useState<string | null>(null);
   const [userName, setUserName] = useState<string>('Student');
-  const [status, setStatus] = useState<'joining' | 'waiting' | 'active' | 'feedback' | 'leaderboard' | 'finished' | 'completed'>('joining');
+  const [status, setStatus] = useState<'joining' | 'prompt_nickname' | 'waiting' | 'active' | 'feedback' | 'leaderboard' | 'finished' | 'completed'>('joining');
+  const [guestNicknameInput, setGuestNicknameInput] = useState('');
+  const [guestJoinError, setGuestJoinError] = useState('');
+  const [guestJoining, setGuestJoining] = useState(false);
+  const [triggerJoinCount, setTriggerJoinCount] = useState(0);
   
   const [currentQuestion, setCurrentQuestion] = useState<LiveQuestion | null>(null);
   const [hasSubmitted, setHasSubmitted] = useState(false);
@@ -52,6 +60,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
   const hasAuthoritativeLeaderboard = useRef(false);
   const restoredSubmission = useRef(false);
   const questionDuration = useRef(30);
+  const questionEndTimeRef = useRef<number>(0);
 
   useEffect(() => {
     let channel: RealtimeChannel | undefined;
@@ -91,14 +100,17 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
         return;
       }
       setStatus('active');
-      const questionKey = `live-quiz-${updatedSession.id}-question-${updatedSession.current_question_index}`;
-      const storedStartTime = window.localStorage.getItem(questionKey);
-      const startTime = storedStartTime ? Number(storedStartTime) : Date.now();
-      if (!storedStartTime) {
-        window.localStorage.setItem(questionKey, String(startTime));
+      const questionKey = `live-quiz-${updatedSession.id}-question-${updatedSession.current_question_index}-end`;
+      const storedEndTime = window.localStorage.getItem(questionKey);
+      const now = Date.now();
+      let targetEnd = storedEndTime ? Number(storedEndTime) : 0;
+      if (!targetEnd || isNaN(targetEnd)) {
+        targetEnd = now + questionDuration.current * 1000;
+        window.localStorage.setItem(questionKey, String(targetEnd));
       }
-      setQuestionStartTime(startTime);
-      const remaining = Math.max(0, questionDuration.current - Math.floor((Date.now() - startTime) / 1000));
+      questionEndTimeRef.current = targetEnd;
+      setQuestionStartTime(targetEnd - questionDuration.current * 1000);
+      const remaining = Math.max(0, Math.ceil((targetEnd - now) / 1000));
       setTimeLeft(remaining);
       setAnswerFeedback(null);
       if (remaining === 0) {
@@ -143,7 +155,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
       // 1. Fetch current user to get their name
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        router.push('/auth');
+        setStatus('prompt_nickname');
         return;
       }
       authenticatedStudentId = user.id;
@@ -166,7 +178,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
 
       if (error || !sessionData) {
         alert('Invalid or expired room code.');
-        router.push('/dashboard/student');
+        router.push(isInstant ? '/' : '/dashboard/student');
         return;
       }
 
@@ -181,7 +193,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
       let lastQuestionIndex = sessionData.current_question_index;
       let lastStatus = sessionData.status;
 
-      // 3 & 5. Connect to Supabase Realtime for both Broadcast and Database Changes
+      // Connect to Supabase Realtime for both Broadcast and Database Changes
       const roomChannel = supabase
         .channel(`room-${roomCode}`, {
           config: { presence: { key: user.id } },
@@ -197,17 +209,19 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
           (payload) => { void applySessionUpdate(payload.new as LiveSession); }
         )
         .on('broadcast', { event: 'question-started' }, (payload) => {
-          const { index, duration, startTime } = payload.payload;
+          const { index, duration, endTime } = payload.payload;
           questionDuration.current = duration;
-          const questionKey = `live-quiz-${sessionData.id}-question-${index}`;
-          const authoritativeStartTime = typeof startTime === 'number' ? startTime : Date.now();
-          window.localStorage.setItem(questionKey, String(authoritativeStartTime));
+          const now = Date.now();
+          const targetEnd = (typeof endTime === 'number' && endTime > now) ? endTime : now + duration * 1000;
+          questionEndTimeRef.current = targetEnd;
+          const questionKey = `live-quiz-${sessionData.id}-question-${index}-end`;
+          window.localStorage.setItem(questionKey, String(targetEnd));
           setStatus('active');
           setHasSubmitted(false);
           restoredSubmission.current = false;
           setAnswerFeedback(null);
-          setTimeLeft(Math.max(0, duration - Math.floor((Date.now() - authoritativeStartTime) / 1000)));
-          setQuestionStartTime(authoritativeStartTime);
+          setTimeLeft(Math.max(0, Math.ceil((targetEnd - now) / 1000)));
+          setQuestionStartTime(now);
           lastQuestionIndex = index;
           lastStatus = 'active';
           void fetchQuestionByIndex(sessionData.quiz_id, index);
@@ -267,15 +281,21 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
       if (poller) window.clearInterval(poller);
       if (channel) supabase.removeChannel(channel);
     };
-  }, [roomCode, router]);
+  }, [roomCode, router, triggerJoinCount]);
 
+  // Synchronized countdown based on target end timestamp
   useEffect(() => {
     if (status !== 'active' && status !== 'feedback') return;
-    const timer = window.setInterval(() => {
-      setTimeLeft((value) => Math.max(0, value - 1));
-    }, 1000);
+    const checkTime = () => {
+      const targetEnd = questionEndTimeRef.current;
+      if (!targetEnd) return;
+      const remaining = Math.max(0, Math.ceil((targetEnd - Date.now()) / 1000));
+      setTimeLeft(remaining);
+    };
+    checkTime();
+    const timer = window.setInterval(checkTime, 250);
     return () => window.clearInterval(timer);
-  }, [status, questionStartTime]);
+  }, [status]);
 
   useEffect(() => {
     if (status !== 'finished' || !session) return;
@@ -320,7 +340,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
     
     setHasSubmitted(true);
     restoredSubmission.current = false;
-    const responseTimeMs = Date.now() - questionStartTime;
+    const responseTimeMs = Math.max(0, Date.now() - questionStartTime);
     const isCorrect = selectedIndex === currentQuestion.correct_option_index;
     setAnswerFeedback({
       selectedIndex,
@@ -350,23 +370,143 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
       });
   };
 
+  const handleGuestJoinSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!guestNicknameInput.trim()) {
+      setGuestJoinError('Please enter a nickname.');
+      return;
+    }
+    setGuestJoining(true);
+    setGuestJoinError('');
+    try {
+      const res = await joinInstantQuizAction({
+        roomCode,
+        nickname: guestNicknameInput.trim(),
+      });
+      if (!res.success || !res.guestEmail || !res.guestPassword) {
+        throw new Error(res.error || 'Failed to join room.');
+      }
+      await supabase.auth.signInWithPassword({
+        email: res.guestEmail,
+        password: res.guestPassword,
+      });
+      setStatus('joining');
+      setTriggerJoinCount((c) => c + 1);
+    } catch (err: any) {
+      setGuestJoinError(err.message || 'Failed to join');
+      setGuestJoining(false);
+    }
+  };
+
+  if (status === 'prompt_nickname') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#fff5f0] p-6 text-black relative overflow-hidden font-mono">
+        <DashboardBackground />
+        <div className="relative z-10 backdrop-blur-md bg-white/95 border-2 border-brand-light rounded-[2.5rem] p-8 sm:p-12 text-center max-w-md w-full shadow-lg">
+          <div className="w-14 h-14 rounded-2xl bg-brand/20 flex items-center justify-center text-brand mx-auto mb-4 shadow-2xs">
+            <Gamepad2 className="w-7 h-7 text-[#E86F47]" />
+          </div>
+          <h2 className="text-2xl sm:text-3xl font-black font-mono tracking-tight text-black mb-1">
+            Join Live Room
+          </h2>
+          <p className="text-xs font-mono text-[#8c827a] mb-6">
+            Room Code: <strong className="text-brand font-black text-sm tracking-widest">#{roomCode}</strong>
+          </p>
+
+          {guestJoinError && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 text-left font-mono">
+              {guestJoinError}
+            </div>
+          )}
+
+          <form onSubmit={handleGuestJoinSubmit} className="space-y-4">
+            <div className="text-left">
+              <label className="block text-xs font-bold uppercase tracking-wider text-[#8c827a] mb-1.5">
+                Your Nickname
+              </label>
+              <input
+                type="text"
+                maxLength={24}
+                required
+                value={guestNicknameInput}
+                onChange={(e) => setGuestNicknameInput(e.target.value)}
+                placeholder="e.g. Flash, Rocket, Alex"
+                className="w-full px-4 py-3 border-2 border-brand-light rounded-xl outline-none focus:ring-2 focus:ring-brand font-mono text-sm font-bold bg-[#fbf5f0] text-black"
+                autoFocus
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={guestJoining}
+              className="w-full py-4 rounded-xl bg-brand hover:brightness-105 active:scale-[0.99] text-black font-mono font-black text-base shadow-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            >
+              {guestJoining ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-black" />
+                  <span>Joining Room...</span>
+                </>
+              ) : (
+                <span>Enter Room Now →</span>
+              )}
+            </button>
+          </form>
+
+          <p className="mt-6 text-xs text-[#8c827a] border-t border-brand-light/60 pt-4">
+            Already have an account?{' '}
+            <button
+              onClick={() => router.push(`/auth?next=/quiz/live/student/${roomCode}`)}
+              className="text-brand font-bold hover:underline cursor-pointer"
+            >
+              Log in here
+            </button>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (status === 'joining') {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-bg">
-        <Loader2 className="w-12 h-12 text-brand animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-[#fff5f0] relative overflow-hidden">
+        <DashboardBackground />
+        <div className="relative z-10 flex flex-col items-center">
+          <div className="w-12 h-12 rounded-full border-4 border-[#edd6cb] border-t-[#E86F47] animate-spin" />
+          <p className="mt-4 font-mono font-bold text-[#8c827a] text-sm animate-pulse">Connecting to live room...</p>
+        </div>
       </div>
     );
   }
 
   if (status === 'waiting') {
     return (
-      <div className="min-h-screen bg-bg flex flex-col items-center justify-center p-6 text-black">
-        <div className="bg-brand-lightest border-2 border-brand-light rounded-[2rem] p-12 text-center max-w-xl w-full shadow-sm">
-          <div className="inline-flex bg-brand-light p-6 rounded-full mb-8">
+      <div className="min-h-screen bg-[#fff5f0] flex flex-col items-center justify-center p-6 text-black relative overflow-hidden">
+        <DashboardBackground />
+        <div className="relative z-10 backdrop-blur-md bg-white/85 border-2 border-brand-light rounded-[2.5rem] p-10 sm:p-12 text-center max-w-xl w-full shadow-lg flex flex-col items-center">
+          <button
+            onClick={() => router.push(isInstant ? '/' : '/dashboard/student')}
+            className="inline-flex items-center gap-2 text-xs font-bold font-mono text-[#E86F47] hover:text-black mb-6 px-3.5 py-1.5 rounded-full bg-white border border-[#E86F47]/20 shadow-xs cursor-pointer self-start"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            {isInstant ? 'Back to Home' : 'Back to Dashboard'}
+          </button>
+
+          {isInstant && (
+            <span className="px-3.5 py-1.5 rounded-xl bg-brand text-black font-mono font-bold text-xs uppercase tracking-wider shadow-2xs mb-4 inline-flex items-center gap-1.5">
+              <Zap className="w-3.5 h-3.5" />
+              <span>Instant Game • Room #{roomCode}</span>
+            </span>
+          )}
+
+          <div className="inline-flex bg-brand-light p-6 rounded-full mb-6 border-2 border-brand-light shadow-sm">
             <MonitorPlay className="w-12 h-12 text-brand" />
           </div>
-          <h2 className="text-4xl sm:text-5xl font-black font-mono tracking-tighter mb-4">You're in, {userName}!</h2>
-          <p className="text-gray-600 font-mono text-xl">Waiting for the teacher to start...</p>
+          <h2 className="text-3xl sm:text-4xl font-black font-mono tracking-tight mb-2 text-black">
+            You&apos;re in, {userName}!
+          </h2>
+          <p className="text-[#8c827a] font-mono text-base sm:text-lg font-bold">
+            Waiting for the host to start the game...
+          </p>
         </div>
       </div>
     );
@@ -375,55 +515,77 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
   if (status === 'feedback') {
     if (restoredSubmission.current && timeLeft > 0) {
       return (
-        <div className="min-h-screen flex flex-col items-center justify-center bg-bg p-6 text-center">
-          <Loader2 className="w-12 h-12 text-brand animate-spin mb-6" />
-          <h1 className="text-3xl font-black font-mono tracking-tighter text-black">Answer submitted</h1>
-          <p className="mt-4 text-gray-500 font-mono text-lg">Waiting for the teacher to start the next question...</p>
+        <div className="min-h-screen flex flex-col items-center justify-center bg-[#fff5f0] p-6 text-center relative overflow-hidden">
+          <DashboardBackground />
+          <div className="relative z-10 backdrop-blur-md bg-white/85 border-2 border-brand-light rounded-[2.5rem] p-12 max-w-xl w-full shadow-lg text-center">
+            <div className="w-12 h-12 rounded-full border-4 border-[#edd6cb] border-t-[#E86F47] animate-spin mx-auto mb-6" />
+            <h1 className="text-3xl sm:text-4xl font-black font-mono tracking-tight text-black">
+              Answer submitted
+            </h1>
+            <p className="mt-3 text-[#8c827a] font-mono font-bold text-lg">
+              Waiting for the teacher to start the next question...
+            </p>
+          </div>
         </div>
       );
     }
 
     if (timeLeft > 0 || !currentQuestion || !answerFeedback) {
       return (
-        <div className="min-h-screen flex flex-col items-center justify-center bg-bg p-6 text-center">
-          <Loader2 className="w-12 h-12 text-brand animate-spin mb-6" />
-          <h1 className="text-3xl font-black font-mono tracking-tighter text-black">Waiting for the question timer...</h1>
-          <p className="mt-4 text-gray-500 font-mono text-lg">The answer result will appear when the timer reaches zero.</p>
-          <p className="mt-6 text-3xl font-black font-mono text-brand">{timeLeft}s remaining</p>
+        <div className="min-h-screen flex flex-col items-center justify-center bg-[#fff5f0] p-6 text-center relative overflow-hidden">
+          <DashboardBackground />
+          <div className="relative z-10 backdrop-blur-md bg-white/85 border-2 border-brand-light rounded-[2.5rem] p-12 max-w-xl w-full shadow-lg text-center">
+            <div className="w-12 h-12 rounded-full border-4 border-[#edd6cb] border-t-[#E86F47] animate-spin mx-auto mb-6" />
+            <h1 className="text-3xl sm:text-4xl font-black font-mono tracking-tight text-black">
+              Waiting for the question timer...
+            </h1>
+            <p className="mt-3 text-[#8c827a] font-mono font-bold text-lg">
+              The answer result will appear when the timer reaches zero.
+            </p>
+            <div className="mt-6 inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-brand-light border-2 border-brand-light">
+              <Clock className="w-6 h-6 text-brand" />
+              <span className="text-3xl font-black font-mono text-brand">{timeLeft}s remaining</span>
+            </div>
+          </div>
         </div>
       );
     }
 
     return (
-      <div className="min-h-screen bg-bg p-6">
-        <main className="max-w-4xl mx-auto pt-10">
-          <p className={`text-center text-4xl font-black font-mono tracking-tighter mb-12 ${answerFeedback.isCorrect ? 'text-green-600' : 'text-red-600'}`}>
-            {answerFeedback.isCorrect ? 'Your answer was correct!' : 'Your answer was wrong.'}
-          </p>
-          <div className="grid gap-4 sm:grid-cols-2">
-            {currentQuestion.options.map((option, index) => {
-              const isCorrect = index === answerFeedback.correctIndex;
-              const isSelected = index === answerFeedback.selectedIndex;
-              return (
-                <div
-                  key={`${currentQuestion.id}-${index}`}
-                  className={`rounded-xl border-2 p-6 text-xl font-mono font-bold transition-all ${
-                    isCorrect
-                      ? 'border-green-500 bg-green-50 text-green-900 shadow-sm'
-                      : isSelected
-                        ? 'border-red-500 bg-red-50 text-red-900 shadow-sm'
-                        : 'border-brand-light bg-white text-gray-700 opacity-60'
-                  }`}
-                >
-                  <span className="mr-4 font-black">{String.fromCharCode(65 + index)}.</span>
-                  {option}
-                  {isCorrect && <p className="mt-3 text-sm font-black text-green-700 uppercase tracking-widest">Correct answer</p>}
-                  {isSelected && !isCorrect && <p className="mt-3 text-sm font-black text-red-700 uppercase tracking-widest">Your answer</p>}
-                </div>
-              );
-            })}
+      <div className="min-h-screen bg-[#fff5f0] p-6 relative overflow-x-hidden">
+        <DashboardBackground />
+        <main className="relative z-10 max-w-4xl mx-auto pt-10">
+          <div className="backdrop-blur-md bg-white/85 border-2 border-brand-light rounded-[2.5rem] p-8 sm:p-12 shadow-lg mb-8 text-center">
+            <p className={`text-3xl sm:text-4xl font-black font-mono tracking-tight mb-8 ${answerFeedback.isCorrect ? 'text-green-600' : 'text-red-600'}`}>
+              {answerFeedback.isCorrect ? '✓ Your answer was correct!' : '✗ Your answer was wrong.'}
+            </p>
+            <div className="grid gap-4 sm:grid-cols-2 text-left">
+              {currentQuestion.options.map((option, index) => {
+                const isCorrect = index === answerFeedback.correctIndex;
+                const isSelected = index === answerFeedback.selectedIndex;
+                return (
+                  <div
+                    key={`${currentQuestion.id}-${index}`}
+                    className={`rounded-2xl border-2 p-6 text-lg sm:text-xl font-mono font-bold transition-all shadow-sm ${
+                      isCorrect
+                        ? 'border-green-500 bg-green-50 text-green-900'
+                        : isSelected
+                          ? 'border-red-500 bg-red-50 text-red-900'
+                          : 'border-brand-light bg-white/90 text-gray-700 opacity-60'
+                    }`}
+                  >
+                    <div className="flex items-center">
+                      <span className="mr-3 font-black text-xl">{String.fromCharCode(65 + index)}.</span>
+                      <span>{option}</span>
+                    </div>
+                    {isCorrect && <p className="mt-3 text-xs font-black text-green-700 uppercase tracking-widest">Correct answer</p>}
+                    {isSelected && !isCorrect && <p className="mt-3 text-xs font-black text-red-700 uppercase tracking-widest">Your answer</p>}
+                  </div>
+                );
+              })}
+            </div>
+            <p className="mt-10 text-[#8c827a] font-mono font-bold text-lg">Waiting for the teacher to start the next question...</p>
           </div>
-          <p className="mt-12 text-center text-gray-500 font-mono font-bold">Waiting for the teacher to start the next question...</p>
         </main>
       </div>
     );
@@ -437,31 +599,32 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
     const isWinner = status === 'finished' && winner?.studentId === studentId;
 
     return (
-      <div className="min-h-screen bg-bg p-6 text-black">
-        <main className="max-w-4xl mx-auto pt-10">
+      <div className="min-h-screen bg-[#fff5f0] p-6 text-black relative overflow-x-hidden">
+        <DashboardBackground />
+        <main className="relative z-10 max-w-4xl mx-auto pt-10">
           {status === 'finished' && winner ? (
-            <div className="text-center mb-12 animate-bounce bg-brand-lightest p-10 rounded-[2rem] border-2 border-brand-light shadow-sm">
+            <div className="text-center mb-10 animate-bounce backdrop-blur-md bg-white/85 p-10 sm:p-12 rounded-[2.5rem] border-2 border-brand-light shadow-lg">
               <Trophy className="w-20 h-20 text-brand mx-auto mb-4" />
-              <p className="text-brand uppercase tracking-widest font-black font-mono text-xl mb-2">
+              <p className="text-brand uppercase tracking-widest font-black font-mono text-lg mb-2">
                 {isWinner ? 'You are the winner!' : 'Winner'}
               </p>
-              <h1 className="text-6xl font-black font-mono tracking-tighter text-black">{winner.name}</h1>
-              <p className="text-gray-500 font-bold font-mono text-lg mt-4">
+              <h1 className="text-5xl sm:text-6xl font-black font-mono tracking-tight text-black">{winner.name}</h1>
+              <p className="text-[#8c827a] font-bold font-mono text-xl mt-4">
                 {winner.correctAnswers} correct answers • {winner.score} points
               </p>
             </div>
-          ) : <h1 className="text-5xl font-black font-mono tracking-tighter mb-10 text-center">Leaderboard</h1>}
+          ) : <h1 className="text-4xl sm:text-5xl font-black font-mono tracking-tight mb-8 text-center text-black">Leaderboard</h1>}
           {studentRank > 0 && (
-            <p className="mb-8 text-center text-2xl font-black font-mono text-brand">
+            <p className="mb-6 text-center text-2xl font-black font-mono text-brand">
               Your position: #{studentRank}
             </p>
           )}
-          <ol className="space-y-4">
+          <ol className="space-y-4 font-mono">
             {leaderboard.slice(status === 'finished' ? 1 : 0).map((entry, index) => (
-              <li key={entry.studentId} className="rounded-2xl border-2 border-brand-light bg-brand-lightest p-6 shadow-sm">
-                <div className="flex justify-between items-center font-mono text-xl">
+              <li key={entry.studentId} className="rounded-2xl border-2 border-brand-light backdrop-blur-md bg-white/90 p-6 shadow-sm">
+                <div className="flex justify-between items-center text-lg sm:text-xl">
                   <span className="font-bold text-black">{index + (status === 'finished' ? 2 : 1)}. {entry.name}</span>
-                  <strong className="text-brand">{entry.correctAnswers} correct • {entry.score} pts</strong>
+                  <strong className="text-brand font-black">{entry.correctAnswers} correct • {entry.score} pts</strong>
                 </div>
                 <div className="mt-4 h-3 rounded-full bg-brand-light overflow-hidden">
                   <div
@@ -473,12 +636,30 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
             ))}
           </ol>
           <button
-            onClick={() => router.push('/dashboard/student')}
-            className="mt-12 w-full rounded-xl bg-brand hover:bg-[#c47155] px-8 py-5 font-black font-mono text-2xl text-black transition shadow-sm"
+            onClick={() => router.push(isInstant ? '/' : '/dashboard/student')}
+            className="mt-10 w-full rounded-2xl bg-brand hover:bg-[#c47155] px-8 py-5 font-black font-mono text-2xl text-black transition shadow-md cursor-pointer"
           >
-            Return to dashboard
+            {isInstant ? 'Back to Home' : 'Return to dashboard'}
           </button>
-          {status !== 'finished' && <p className="mt-8 text-gray-500 font-mono text-center font-bold">Waiting for the teacher to start the next question...</p>}
+          {status === 'finished' && isInstant && (
+            <div className="mt-8 p-6 rounded-2xl bg-white/95 border-2 border-brand-light text-center font-mono shadow-sm">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand/20 text-black text-xs font-bold uppercase mb-2">
+                <Zap className="w-3.5 h-3.5 text-brand" />
+                <span>Instant Game Finished</span>
+              </div>
+              <h4 className="text-base font-black text-black">Enjoyed playing live on Quizeee?</h4>
+              <p className="text-xs text-[#5c544e] mt-1 max-w-md mx-auto">
+                Create a student account to save your scores, build your streak, and participate in classroom assignments!
+              </p>
+              <button
+                onClick={() => router.push('/auth?mode=signup&role=student')}
+                className="mt-3 px-6 py-2.5 rounded-xl bg-black hover:bg-brand text-white text-xs font-bold transition shadow-xs cursor-pointer"
+              >
+                Create Student Account →
+              </button>
+            </div>
+          )}
+          {status !== 'finished' && <p className="mt-8 text-[#8c827a] font-mono text-center font-bold">Waiting for the teacher to start the next question...</p>}
         </main>
       </div>
     );
@@ -486,14 +667,15 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
 
   if (status === 'completed') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-bg p-6 text-black">
-        <div className="bg-brand-lightest border-2 border-brand-light rounded-[2rem] p-12 text-center shadow-sm">
-          <p className="text-3xl font-black font-mono tracking-tighter mb-8">This live quiz has ended.</p>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#fff5f0] p-6 text-black relative overflow-hidden font-mono">
+        <DashboardBackground />
+        <div className="relative z-10 backdrop-blur-md bg-white/85 border-2 border-brand-light rounded-[2.5rem] p-12 text-center shadow-lg max-w-md w-full">
+          <p className="text-3xl font-black font-mono tracking-tight mb-8 text-black">This live quiz has ended.</p>
           <button
-            onClick={() => router.push('/dashboard/student')}
-            className="w-full rounded-xl bg-brand hover:bg-[#c47155] px-8 py-5 font-black font-mono text-xl text-black transition shadow-sm"
+            onClick={() => router.push(isInstant ? '/' : '/dashboard/student')}
+            className="w-full rounded-xl bg-brand hover:bg-[#c47155] px-8 py-5 font-black font-mono text-xl text-black transition shadow-sm cursor-pointer"
           >
-            Return to dashboard
+            {isInstant ? 'Back to Home' : 'Return to dashboard'}
           </button>
         </div>
       </div>
@@ -502,36 +684,46 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
 
   if (!currentQuestion) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-bg">
-        <Loader2 className="w-12 h-12 text-brand animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-[#fff5f0] relative overflow-hidden">
+        <DashboardBackground />
+        <div className="relative z-10 flex flex-col items-center">
+          <div className="w-12 h-12 rounded-full border-4 border-[#edd6cb] border-t-[#E86F47] animate-spin" />
+          <p className="mt-4 font-mono font-bold text-[#8c827a] text-sm animate-pulse">Loading question...</p>
+        </div>
       </div>
     );
   }
 
   if (hasSubmitted) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-bg p-6 text-center">
-        <Loader2 className="w-12 h-12 text-brand animate-spin mb-6" />
-        <h1 className="text-3xl font-black font-mono tracking-tighter text-black">Waiting for next question...</h1>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#fff5f0] p-6 text-center relative overflow-hidden">
+        <DashboardBackground />
+        <div className="relative z-10 backdrop-blur-md bg-white/85 border-2 border-brand-light rounded-[2.5rem] p-12 max-w-xl w-full shadow-lg text-center">
+          <div className="w-12 h-12 rounded-full border-4 border-[#edd6cb] border-t-[#E86F47] animate-spin mx-auto mb-6" />
+          <h1 className="text-3xl sm:text-4xl font-black font-mono tracking-tight text-black">Waiting for next question...</h1>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-bg p-6 flex flex-col items-center">
-      <main className="max-w-4xl w-full pt-10">
-        <div className="flex justify-between items-center mb-8 bg-brand-lightest border-2 border-brand-light p-6 rounded-2xl shadow-sm">
-          <p className="text-lg font-bold font-mono uppercase tracking-widest text-brand">Live quiz</p>
+    <div className="min-h-screen bg-[#fff5f0] p-6 flex flex-col items-center relative overflow-x-hidden">
+      <DashboardBackground />
+      <main className="relative z-10 max-w-4xl w-full pt-10">
+        <div className="flex justify-between items-center mb-8 backdrop-blur-md bg-white/85 border-2 border-brand-light p-6 rounded-2xl shadow-md">
+          <p className="text-lg font-black font-mono uppercase tracking-widest text-brand">Live quiz</p>
           <div className="flex items-center gap-3">
-            <span className="text-lg font-bold font-mono text-gray-500">Time left:</span>
-            <span className={`text-2xl font-black font-mono px-4 py-2 rounded-xl ${timeLeft < 10 ? 'bg-red-100 text-red-600' : 'bg-brand-light text-black'}`}>
+            <span className="text-lg font-bold font-mono text-[#8c827a]">Time left:</span>
+            <span className={`text-2xl font-black font-mono px-5 py-2.5 rounded-xl border-2 transition ${
+              timeLeft < 10 ? 'bg-red-50 text-red-600 border-red-300' : 'bg-brand-light text-black border-brand-light'
+            }`}>
               {timeLeft}s
             </span>
           </div>
         </div>
         
-        <div className="bg-brand-lightest p-10 rounded-[2rem] shadow-sm border-2 border-brand-light mb-8">
-          <h1 className="text-4xl sm:text-5xl font-black font-mono tracking-tighter text-black mb-12 leading-tight">
+        <div className="backdrop-blur-md bg-white/85 p-8 sm:p-12 rounded-[2.5rem] shadow-lg border-2 border-brand-light mb-8">
+          <h1 className="text-3xl sm:text-4xl font-black font-mono tracking-tight text-black mb-10 leading-snug">
             {currentQuestion.question_text}
           </h1>
           <div className="grid gap-4">
@@ -539,12 +731,12 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
               <button
                 key={`${currentQuestion.id}-${index}`}
                 onClick={() => handleAnswerSubmit(index)}
-                className="w-full rounded-xl bg-white border-2 border-brand-light p-6 text-left text-2xl font-bold font-mono text-black shadow-sm transition hover:border-brand hover:bg-brand-lightest hover:scale-[1.01]"
+                className="w-full rounded-2xl bg-white/95 border-2 border-brand-light p-6 text-left text-xl sm:text-2xl font-bold font-mono text-black shadow-sm transition hover:border-brand hover:bg-brand-lightest hover:scale-[1.01] flex items-center"
               >
-                <span className="mr-4 inline-block w-10 h-10 text-center leading-[2.1rem] rounded-full bg-brand-light text-black border-2 border-transparent">
+                <span className="mr-4 inline-flex items-center justify-center w-11 h-11 shrink-0 rounded-full bg-brand-light text-brand font-black border-2 border-brand-light">
                   {String.fromCharCode(65 + index)}
                 </span>
-                {option}
+                <span className="leading-snug">{option}</span>
               </button>
             ))}
           </div>

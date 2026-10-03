@@ -13,6 +13,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import DashboardBackground from '@/components/DashboardBackground';
+import DashboardLoading from '@/components/DashboardLoading';
 
 type TopicStats = {
   correct: number;
@@ -144,55 +146,60 @@ export default function AnalyticsDashboard({
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-bg">
-        <Loader2 className="w-8 h-8 text-brand animate-spin" />
+      <div className="min-h-screen bg-[#fff5f0] flex items-center justify-center relative">
+        <DashboardBackground />
+        <DashboardLoading />
       </div>
     );
   }
 
   if (errorMessage || !sessionData) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-bg p-6 text-center">
-        <AlertCircle className="w-12 h-12 text-red-400 mb-4" />
-        <p className="text-gray-700 font-mono text-xl">{errorMessage || 'Analytics are unavailable.'}</p>
-        <button
-          onClick={() => router.push('/dashboard/teacher')}
-          className="mt-6 rounded-xl bg-brand px-6 py-3 font-bold font-mono text-black hover:bg-[#c47155]"
-        >
-          Return to dashboard
-        </button>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#fff5f0] p-6 text-center relative">
+        <DashboardBackground />
+        <div className="relative z-10 bg-white/90 p-8 rounded-3xl border border-[#E86F47]/30 shadow-sm max-w-md">
+          <AlertCircle className="w-12 h-12 text-[#E86F47] mx-auto mb-4" />
+          <p className="text-gray-700 font-mono text-xl">{errorMessage || 'Analytics are unavailable.'}</p>
+          <button
+            onClick={() => router.push('/dashboard/teacher')}
+            className="mt-6 rounded-full bg-[#E86F47] px-6 py-3 font-bold font-mono text-white hover:bg-[#c94e26] transition cursor-pointer"
+          >
+            Return to dashboard
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-bg p-6">
-      <div className="max-w-6xl mx-auto">
+    <div className="min-h-screen bg-[#fff5f0] text-foreground font-mono relative p-6 pb-16 selection:bg-[#E86F47] selection:text-white">
+      <DashboardBackground />
+      <div className="max-w-6xl mx-auto relative z-10">
         <button
           onClick={() => router.push('/dashboard/teacher/analytics')}
-          className="mb-8 flex items-center gap-2 text-sm font-bold font-mono text-brand hover:text-black transition"
+          className="mb-8 inline-flex items-center gap-2 text-sm font-bold font-mono text-[#E86F47] hover:text-black transition px-4 py-2 rounded-full bg-white/85 backdrop-blur-md border border-[#E86F47]/20 shadow-xs cursor-pointer"
         >
           <ArrowLeft className="h-4 w-4" />
           Back
         </button>
 
-        <div className="flex items-center gap-4 mb-8 min-w-0">
-          <BarChart3 className="w-10 h-10 text-brand shrink-0" />
-          <h1 className="text-4xl sm:text-5xl font-bold font-mono tracking-tighter text-black " title={quizMetadata?.title || 'Quiz'}>
+        <div className="flex items-center gap-4 mb-8 min-w-0 p-5 px-6 rounded-2xl bg-white/80 backdrop-blur-md border border-[#E86F47]/20 shadow-sm max-w-fit">
+          <BarChart3 className="w-9 h-9 text-[#E86F47] shrink-0" />
+          <h1 className="text-3xl sm:text-5xl font-bold font-mono tracking-tighter text-black truncate" title={quizMetadata?.title || 'Quiz'}>
             {quizMetadata?.title || 'Quiz'}
           </h1>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-brand-lightest p-8 rounded-[2rem] border border-brand-light shadow-sm flex flex-col items-center justify-center text-center">
+          <div className="bg-[#fbe6df]/90 backdrop-blur-md p-8 rounded-[2rem] border border-[#f5c4b5] shadow-md shadow-[#E86F47]/5 flex flex-col items-center justify-center text-center">
             <p className="text-lg font-bold font-mono text-gray-500 mb-2">Class Accuracy</p>
-            <h2 className="text-6xl font-black font-mono text-brand">{overallAccuracy}%</h2>
+            <h2 className="text-6xl font-black font-mono text-[#E86F47]">{overallAccuracy}%</h2>
           </div>
-          <div className="bg-brand-lightest p-8 rounded-[2rem] border border-brand-light shadow-sm flex flex-col items-center justify-center text-center">
+          <div className="bg-[#fbe6df]/90 backdrop-blur-md p-8 rounded-[2rem] border border-[#f5c4b5] shadow-md shadow-[#E86F47]/5 flex flex-col items-center justify-center text-center">
             <p className="text-lg font-bold font-mono text-gray-500 mb-2">Topics Assessed</p>
             <h2 className="text-6xl font-black font-mono text-black">{chartData.length}</h2>
           </div>
-          <div className="bg-brand-lightest p-8 rounded-[2rem] border border-brand-light shadow-sm flex flex-col items-center justify-center text-center">
+          <div className="bg-[#fbe6df]/90 backdrop-blur-md p-8 rounded-[2rem] border border-[#f5c4b5] shadow-md shadow-[#E86F47]/5 flex flex-col items-center justify-center text-center">
             <p className="text-lg font-bold font-mono text-gray-500 mb-2">Quiz Type</p>
             <h2 className="text-5xl font-black font-mono capitalize text-black">
               {quizMetadata?.type || 'Unknown'}
@@ -200,7 +207,7 @@ export default function AnalyticsDashboard({
           </div>
         </div>
 
-        <div className="bg-brand-lightest p-8 rounded-[2rem] border border-brand-light shadow-sm h-[500px]">
+        <div className="bg-[#fbe6df]/90 backdrop-blur-md p-8 rounded-[2rem] border border-[#f5c4b5] shadow-md shadow-[#E86F47]/5 h-[500px]">
           <h2 className="text-3xl font-bold font-mono text-black mb-8 text-center sm:text-left">
             Classroom Comprehension by Subtopic
           </h2>
@@ -230,10 +237,10 @@ export default function AnalyticsDashboard({
                 />
                 <Tooltip
                   formatter={(value) => [`${value ?? 0}%`, 'Accuracy']}
-                  cursor={{ fill: '#f3e6e1' }}
+                  cursor={{ fill: '#fbe6df' }}
                   contentStyle={{
                     borderRadius: '12px',
-                    border: '2px solid #ebd8ce',
+                    border: '2px solid #f5c4b5',
                     boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
                     backgroundColor: '#ffffff',
                     fontFamily: 'monospace',
@@ -241,7 +248,7 @@ export default function AnalyticsDashboard({
                     fontSize: '16px'
                   }}
                 />
-                <Bar dataKey="accuracy" fill="#d27d60" radius={[12, 12, 0, 0]} maxBarSize={80} />
+                <Bar dataKey="accuracy" fill="#E86F47" radius={[12, 12, 0, 0]} maxBarSize={80} />
               </RechartsBarChart>
             </ResponsiveContainer>
           )}

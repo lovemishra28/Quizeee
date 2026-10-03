@@ -1,60 +1,66 @@
 'use server';
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { PDFParse } from 'pdf-parse';
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+import { generateQuizAI, generateQuizAIFromPdfBuffer, AIProvider } from '@/lib/ai';
 
 export async function processStudyMaterial(formData: FormData) {
     try {
-        const file = formData.get('file') as File;
+        const file = formData.get('file') as File | null;
+        const topic = (formData.get('topic') as string | null)?.trim();
         const questionCount = parseInt(formData.get('questionCount') as string) || 5;
+        const providerOverride = (formData.get('provider') as AIProvider) || undefined;
 
-        if (!file) throw new Error('No file provided');
+        // If a direct topic or study notes are provided without a file
+        if (topic && (!file || file.size === 0)) {
+            console.log(`[AI] Generating ${questionCount} questions directly from topic prompt: "${topic}"`);
+            const { questions, provider } = await generateQuizAI(
+                `Topic: ${topic}\nPlease generate multiple choice questions covering this topic.`,
+                questionCount,
+                providerOverride
+            );
+            return { success: true, questions, provider, isMultimodal: false };
+        }
 
-        // 1. Extract text from the PDF
+        if (!file || file.size === 0) throw new Error('Please enter a topic or upload study material.');
+
+        // 1. Read PDF buffer
         const arrayBuffer = await file.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
-        const parser = new PDFParse({ data: buffer });
-        const textResult = await parser.getText();
-        const extractedText = textResult.text;
 
-        // 2. Initialize the Gemini model
-        const model = genAI.getGenerativeModel({
-            model: 'gemini-3.6-flash',
-            // Force the AI to output valid JSON instead of conversational text
-            generationConfig: { responseMimeType: 'application/json' }
-        });
-
-        // 3. Engineer the strict JSON prompt
-        const prompt = `
-      You are an expert educational AI. Based on the provided study material, generate exactly ${questionCount} multiple-choice questions.
-      Your entire response must be a single JSON array containing objects that exactly match this schema:
-      
-      [
-        {
-          "question_text": "The actual question string",
-          "options": ["Option A", "Option B", "Option C", "Option D"],
-          "correct_option_index": 0, // An integer (0 to 3) indicating the correct option
-          "explanation": "A short sentence explaining why this answer is correct",
-          "subtopic": "A 1-3 word tag representing the specific concept"
+        // 2. Attempt standard text extraction with PDFParse
+        let extractedText = '';
+        try {
+            const parser = new PDFParse({ data: buffer });
+            const textResult = await parser.getText();
+            extractedText = textResult.text || '';
+        } catch (pdfErr: any) {
+            console.warn('[PDF] Standard text extraction failed, falling back to multimodal AI vision:', pdfErr.message);
         }
-      ]
 
-      Study Material Content:
-      """
-      ${extractedText}
-      """
-    `;
+        // Clean out page delimiters and whitespace to test for actual readable content
+        const meaningfulText = extractedText.replace(/--\s*\d+\s*of\s*\d+\s*--/gi, '').trim();
 
-        // 4. Execute the AI request
-        const result = await model.generateContent(prompt);
-        const responseText = result.response.text();
+        // 3. If PDF has readable text, use standard text-based AI generation
+        if (meaningfulText.length >= 80) {
+            console.log(`[PDF] Extracted ${meaningfulText.length} characters of readable text. Using text AI pipeline...`);
+            const { questions, provider } = await generateQuizAI(
+                extractedText,
+                questionCount,
+                providerOverride
+            );
+            return { success: true, questions, provider, isMultimodal: false };
+        }
 
-        // 5. Parse the raw JSON string into usable JavaScript objects
-        const generatedQuestions = JSON.parse(responseText);
+        // 4. Otherwise, this is a scanned/image-based/slide presentation PDF.
+        // Process directly using Multimodal Vision AI!
+        console.log('[PDF] No selectable text detected (image-based or slide PDF). Utilizing Multimodal AI Vision directly...');
+        const { questions, provider } = await generateQuizAIFromPdfBuffer(
+            buffer,
+            questionCount,
+            providerOverride
+        );
 
-        return { success: true, questions: generatedQuestions };
+        return { success: true, questions, provider, isMultimodal: true };
 
     } catch (error: any) {
         console.error('Error generating quiz:', error);
