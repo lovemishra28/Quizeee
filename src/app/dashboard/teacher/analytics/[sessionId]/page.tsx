@@ -79,13 +79,22 @@ export default function AnalyticsDashboard({
 
       const { data: sessionInfo, error: sessionError } = await supabase
         .from('quiz_sessions')
-        .select('id, quiz_id, quizzes(title, type)')
+        .select('id, quiz_id, quizzes(title, type, teacher_id)')
         .eq('id', sessionId)
         .single();
 
       if (sessionError || !sessionInfo) {
         if (!cancelled) {
           setErrorMessage('Session data not found.');
+          setLoading(false);
+        }
+        return;
+      }
+
+      const quiz = Array.isArray(sessionInfo.quizzes) ? sessionInfo.quizzes[0] : sessionInfo.quizzes;
+      if (quiz?.teacher_id && quiz.teacher_id !== user.id) {
+        if (!cancelled) {
+          setErrorMessage('You are not authorized to view analytics for this quiz session.');
           setLoading(false);
         }
         return;

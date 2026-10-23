@@ -1,10 +1,76 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import RoleCards from '@/components/RoleCards';
 import InstantQuizSection from '@/components/InstantQuizSection';
+import DashboardLoading from '@/components/DashboardLoading';
+import DashboardBackground from '@/components/DashboardBackground';
+import { supabase } from '@/lib/supabaseClient';
+import { getCachedProfileDirect, setCachedProfile, hasPotentialSession } from '@/lib/authCache';
 
 export default function Home() {
+  const router = useRouter();
+  const [checkingAuth, setCheckingAuth] = useState(() => hasPotentialSession());
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkAuth() {
+      // 1. Instant check for cached profile
+      const cached = getCachedProfileDirect();
+      if (cached?.role) {
+        router.replace(cached.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
+        return;
+      }
+
+      // 2. Check Supabase session
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role, full_name')
+          .eq('id', session.user.id)
+          .single();
+
+        const role = profile?.role || 'student';
+        setCachedProfile({
+          id: session.user.id,
+          full_name: profile?.full_name || '',
+          role,
+        });
+
+        if (!cancelled) {
+          router.replace(role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
+        }
+        return;
+      }
+
+      // 3. No active session found -> allow displaying the public landing page
+      if (!cancelled) {
+        setCheckingAuth(false);
+      }
+    }
+
+    checkAuth();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen bg-[#fff5f0] flex items-center justify-center relative overflow-hidden font-mono">
+        <DashboardBackground />
+        <DashboardLoading />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#fff5f0] text-foreground font-mono overflow-x-hidden relative selection:bg-[#E86F47] selection:text-white flex flex-col">
 

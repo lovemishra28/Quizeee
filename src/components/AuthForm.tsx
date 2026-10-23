@@ -1,11 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
 import { Mail, Lock, Eye, EyeOff, CheckSquare } from 'lucide-react';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
+import DashboardLoading from '@/components/DashboardLoading';
+import DashboardBackground from '@/components/DashboardBackground';
+import { setCachedProfile, getCachedProfileDirect, setRememberMeActive, hasPotentialSession } from '@/lib/authCache';
 
 interface AuthFormProps {
     initialSignUp?: boolean;
@@ -20,12 +23,45 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
     const [errorMsg, setErrorMsg] = useState('');
     const [loading, setLoading] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
+    const [rememberMe, setRememberMe] = useState(false);
+    const [checkingExisting, setCheckingExisting] = useState(() => hasPotentialSession());
     const router = useRouter();
+
+    useEffect(() => {
+        async function checkExistingAuth() {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session) {
+                const cached = getCachedProfileDirect();
+                if (cached?.role) {
+                    router.replace(cached.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
+                    return;
+                }
+                const { data: profile } = await supabase
+                    .from('profiles')
+                    .select('role, full_name')
+                    .eq('id', session.user.id)
+                    .single();
+                const userRole = profile?.role || 'student';
+                setCachedProfile({
+                    id: session.user.id,
+                    full_name: profile?.full_name || '',
+                    role: userRole,
+                });
+                router.replace(userRole === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
+                return;
+            }
+            setCheckingExisting(false);
+        }
+        checkExistingAuth();
+    }, [router]);
 
     const handleAuth = async (e: React.FormEvent) => {
         e.preventDefault();
         setErrorMsg('');
         setLoading(true);
+
+        // Store remember me choice so authStorage adapter uses persistent localStorage or sessionStorage
+        setRememberMeActive(rememberMe);
 
         if (isSignUp) {
             const { data, error } = await supabase.auth.signUp({
@@ -41,7 +77,12 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
 
             if (error) {
                 setErrorMsg(error.message);
-            } else {
+            } else if (data.user) {
+                setCachedProfile({
+                    id: data.user.id,
+                    full_name: fullName,
+                    role: role,
+                });
                 router.push(role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
             }
         } else {
@@ -52,14 +93,19 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
 
             if (error) {
                 setErrorMsg(error.message);
-            } else {
+            } else if (data.user) {
                 const { data: profile } = await supabase
                     .from('profiles')
-                    .select('role')
+                    .select('role, full_name')
                     .eq('id', data.user.id)
                     .single();
 
                 const userRole = profile?.role || 'student';
+                setCachedProfile({
+                    id: data.user.id,
+                    full_name: profile?.full_name || '',
+                    role: userRole,
+                });
                 router.push(userRole === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
             }
         }
@@ -81,6 +127,15 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
         }
     };
 
+    if (checkingExisting) {
+        return (
+            <div className="min-h-screen bg-[#fff5f0] flex items-center justify-center relative overflow-hidden font-mono">
+                <DashboardBackground />
+                <DashboardLoading />
+            </div>
+        );
+    }
+
     return (
         <div className="min-h-screen flex flex-col bg-[#fff5f0]">
             {/* Shared Unified Navbar */}
@@ -89,7 +144,7 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
             {/* Main Content */}
             <div className="flex-1 flex items-center justify-center p-8">
                 <div className="w-full max-w-5xl bg-white rounded-3xl shadow-sm border border-[#f5c4b5] overflow-hidden flex flex-col md:flex-row min-h-[600px]">
-                    
+
                     {/* Left Side - Illustration Panel */}
                     <div className="md:w-[45%] bg-[#faebe3] p-8 sm:p-10 lg:p-12 flex flex-col justify-between relative overflow-hidden">
                         {/* Big Prominent quizeee Brand Logo */}
@@ -155,8 +210,8 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                                 {isSignUp ? 'Create Account' : 'Welcome Back'}
                             </h2>
                             <p className="text-gray-500 font-mono text-sm mb-8">
-                                {isSignUp 
-                                    ? 'Create your account to start managing quizzes' 
+                                {isSignUp
+                                    ? 'Create your account to start managing quizzes'
                                     : 'Login to your account'}
                             </p>
 
@@ -209,8 +264,8 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                                         className="w-full pl-12 pr-12 py-3.5 border border-[#f5c4b5] rounded-xl focus:ring-1 focus:ring-[#E86F47] focus:border-[#E86F47] outline-none font-mono text-sm bg-white text-[#1c1917] font-medium placeholder:text-[#8c827a] transition-colors"
                                         placeholder="Password"
                                     />
-                                    <button 
-                                        type="button" 
+                                    <button
+                                        type="button"
                                         onClick={() => setShowPassword(!showPassword)}
                                         className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-500 hover:text-gray-700 transition-colors"
                                     >
@@ -226,8 +281,8 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                                                 type="button"
                                                 onClick={() => setRole('teacher')}
                                                 className={`py-3 rounded-xl font-mono text-sm transition-colors border ${role === 'teacher'
-                                                        ? 'bg-[#E86F47] text-white border-[#E86F47]'
-                                                        : 'bg-white text-gray-600 border-[#f5c4b5] hover:bg-[#fff5f0]'
+                                                    ? 'bg-[#E86F47] text-white border-[#E86F47]'
+                                                    : 'bg-white text-gray-600 border-[#f5c4b5] hover:bg-[#fff5f0]'
                                                     }`}
                                             >
                                                 Teacher
@@ -236,8 +291,8 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                                                 type="button"
                                                 onClick={() => setRole('student')}
                                                 className={`py-3 rounded-xl font-mono text-sm transition-colors border ${role === 'student'
-                                                        ? 'bg-[#E86F47] text-white border-[#E86F47]'
-                                                        : 'bg-white text-gray-600 border-[#f5c4b5] hover:bg-[#fff5f0]'
+                                                    ? 'bg-[#E86F47] text-white border-[#E86F47]'
+                                                    : 'bg-white text-gray-600 border-[#f5c4b5] hover:bg-[#fff5f0]'
                                                     }`}
                                             >
                                                 Student
@@ -248,11 +303,29 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
 
                                 {!isSignUp && (
                                     <div className="flex items-center justify-between pt-1">
-                                        <label className="flex items-center gap-2 cursor-pointer">
-                                            <input type="checkbox" className="w-4 h-4 rounded border-[#f5c4b5] text-[#E86F47] focus:ring-[#E86F47] cursor-pointer" />
+                                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                                            <input
+                                                type="checkbox"
+                                                checked={rememberMe}
+                                                onChange={(e) => setRememberMe(e.target.checked)}
+                                                className="w-4 h-4 rounded border-[#f5c4b5] text-[#E86F47] focus:ring-[#E86F47] accent-[#E86F47] cursor-pointer"
+                                            />
                                             <span className="text-sm font-mono text-gray-700">Remember me</span>
                                         </label>
                                         <a href="#" className="text-sm font-mono text-[#E86F47] hover:underline">Forgot Password?</a>
+                                    </div>
+                                )}
+                                {isSignUp && (
+                                    <div className="flex items-center justify-between pt-1">
+                                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                                            <input
+                                                type="checkbox"
+                                                checked={rememberMe}
+                                                onChange={(e) => setRememberMe(e.target.checked)}
+                                                className="w-4 h-4 rounded border-[#f5c4b5] text-[#E86F47] focus:ring-[#E86F47] accent-[#E86F47] cursor-pointer"
+                                            />
+                                            <span className="text-sm font-mono text-gray-700">Remember me</span>
+                                        </label>
                                     </div>
                                 )}
 
@@ -265,12 +338,12 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                                 </button>
                             </form>
 
-                            <div className="my-8 flex items-center before:flex-1 before:border-t before:border-[#f5c4b5] after:flex-1 after:border-t after:border-[#f5c4b5]">
+                            {/* <div className="my-8 flex items-center before:flex-1 before:border-t before:border-[#f5c4b5] after:flex-1 after:border-t after:border-[#f5c4b5]">
                                 <span className="px-4 text-sm font-mono text-gray-400">or continue with</span>
-                            </div>
+                            </div> */}
 
                             <div className="w-full">
-                                <button
+                                {/* <button
                                     type="button"
                                     onClick={handleGoogleLogin}
                                     className="w-full flex items-center justify-center gap-3 py-3.5 px-4 border border-[#f5c4b5] rounded-xl hover:bg-[#fff5f0] hover:border-[#E86F47]/60 transition-all font-mono text-sm font-semibold text-black shadow-2xs group cursor-pointer"
@@ -282,12 +355,12 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                                         <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
                                     </svg>
                                     <span className="group-hover:text-[#E86F47] transition-colors">Continue with Google</span>
-                                </button>
+                                </button> */}
                             </div>
 
                             <div className="mt-8 text-center font-mono text-sm text-black">
                                 {isSignUp ? "Already have an account? " : "Don't have an account? "}
-                                <button 
+                                <button
                                     onClick={() => setIsSignUp(!isSignUp)}
                                     className="text-[#E86F47] hover:underline"
                                 >

@@ -77,6 +77,12 @@ export default function TeacherQuizDetails({ params }: { params: Promise<{ quizI
                     router.push('/dashboard/teacher');
                     return;
                 }
+
+                if (user && quizData.teacher_id && quizData.teacher_id !== user.id) {
+                    alert('You do not have permission to view this quiz.');
+                    router.push('/dashboard/teacher');
+                    return;
+                }
                 setQuiz(quizData);
 
                 // 2. Fetch questions
