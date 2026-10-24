@@ -4,36 +4,47 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
 import { Mail, Lock, Eye, EyeOff, CheckSquare } from 'lucide-react';
-import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import DashboardLoading from '@/components/DashboardLoading';
 import DashboardBackground from '@/components/DashboardBackground';
-import { setCachedProfile, getCachedProfileDirect, setRememberMeActive, hasPotentialSession } from '@/lib/authCache';
+import { setCachedProfile, getCachedProfileDirect, setRememberMeActive } from '@/lib/authCache';
+import { safeAuthReturnPath } from '@/lib/authRedirect';
+import Image from 'next/image';
 
 interface AuthFormProps {
     initialSignUp?: boolean;
+    initialRole?: 'teacher' | 'student';
+    returnTo?: string;
+    initialReset?: boolean;
 }
 
-export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
+export default function AuthForm({ initialSignUp = false, initialRole = 'teacher', returnTo, initialReset = false }: AuthFormProps) {
     const [isSignUp, setIsSignUp] = useState(initialSignUp);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [fullName, setFullName] = useState('');
-    const [role, setRole] = useState<'teacher' | 'student'>('teacher');
+    const [role, setRole] = useState<'teacher' | 'student'>(initialRole);
     const [errorMsg, setErrorMsg] = useState('');
+    const [infoMsg, setInfoMsg] = useState('');
+    const [isRecovering, setIsRecovering] = useState(false);
+    const [isResetting, setIsResetting] = useState(initialReset);
+    const [confirmPassword, setConfirmPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
     const [rememberMe, setRememberMe] = useState(false);
-    const [checkingExisting, setCheckingExisting] = useState(() => hasPotentialSession());
+    const [checkingExisting, setCheckingExisting] = useState(!initialReset);
     const router = useRouter();
 
     useEffect(() => {
+        let cancelled = false;
         async function checkExistingAuth() {
+            if (initialReset) return;
             const { data: { session } } = await supabase.auth.getSession();
-            if (session) {
+            if (cancelled) return;
+            if (session && !session.user.user_metadata?.is_guest) {
                 const cached = getCachedProfileDirect();
-                if (cached?.role) {
-                    router.replace(cached.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
+                if (cached?.role && cached.id === session.user.id) {
+                    router.replace(safeAuthReturnPath(returnTo) || (cached.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student'));
                     return;
                 }
                 const { data: profile } = await supabase
@@ -47,84 +58,74 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                     full_name: profile?.full_name || '',
                     role: userRole,
                 });
-                router.replace(userRole === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
+                if (!cancelled) router.replace(safeAuthReturnPath(returnTo) || (userRole === 'teacher' ? '/dashboard/teacher' : '/dashboard/student'));
                 return;
             }
-            setCheckingExisting(false);
+            if (!cancelled) setCheckingExisting(false);
         }
-        checkExistingAuth();
-    }, [router]);
+        void checkExistingAuth().catch(() => { if (!cancelled) setCheckingExisting(false); });
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(event => {
+            if (event === 'PASSWORD_RECOVERY') {
+                setIsResetting(true); setIsRecovering(false); setIsSignUp(false); setCheckingExisting(false);
+            }
+        });
+        return () => { cancelled = true; subscription.unsubscribe(); };
+    }, [router, returnTo, initialReset]);
 
     const handleAuth = async (e: React.FormEvent) => {
         e.preventDefault();
         setErrorMsg('');
+        setInfoMsg('');
         setLoading(true);
-
-        // Store remember me choice so authStorage adapter uses persistent localStorage or sessionStorage
-        setRememberMeActive(rememberMe);
-
-        if (isSignUp) {
-            const { data, error } = await supabase.auth.signUp({
-                email,
-                password,
-                options: {
-                    data: {
-                        full_name: fullName,
-                        role: role,
-                    },
-                },
-            });
-
-            if (error) {
-                setErrorMsg(error.message);
-            } else if (data.user) {
-                setCachedProfile({
-                    id: data.user.id,
-                    full_name: fullName,
-                    role: role,
-                });
-                router.push(role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
+        try {
+            if (isRecovering) {
+                const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: `${window.location.origin}/auth?mode=reset` });
+                if (error) throw error;
+                setInfoMsg('If an account exists for this email, you will receive a password reset link.');
+                return;
             }
-        } else {
-            const { data, error } = await supabase.auth.signInWithPassword({
-                email,
-                password,
-            });
-
-            if (error) {
-                setErrorMsg(error.message);
-            } else if (data.user) {
-                const { data: profile } = await supabase
-                    .from('profiles')
-                    .select('role, full_name')
-                    .eq('id', data.user.id)
-                    .single();
-
-                const userRole = profile?.role || 'student';
-                setCachedProfile({
-                    id: data.user.id,
-                    full_name: profile?.full_name || '',
-                    role: userRole,
-                });
-                router.push(userRole === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
+            if (isResetting) {
+                if (password.length < 8 || password !== confirmPassword) throw new Error('Use at least 8 characters and make sure the passwords match.');
+                const { data: { user }, error: userError } = await supabase.auth.getUser();
+                if (userError || !user) throw new Error('This reset link is invalid or expired. Request a new recovery email.');
+                const { error } = await supabase.auth.updateUser({ password });
+                if (error) throw error;
+                await supabase.auth.signOut(); setCachedProfile(null);
+                setIsResetting(false); setIsSignUp(false); setPassword(''); setConfirmPassword('');
+                window.history.replaceState(null, '', '/auth');
+                setInfoMsg('Your password has been updated. Sign in with your new password.');
+                return;
             }
+            setRememberMeActive(rememberMe);
+            if (isSignUp) {
+                if (!fullName.trim() || fullName.trim().length > 100) throw new Error('Enter a full name of at most 100 characters.');
+                const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { full_name: fullName.trim(), role } } });
+                if (error) throw error;
+                if (!data.session) {
+                    setPassword(''); setInfoMsg('Check your email to confirm your account before signing in.');
+                    return;
+                }
+                setCachedProfile({ id: data.session.user.id, full_name: fullName.trim(), role });
+                router.push(safeAuthReturnPath(returnTo) || (role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student'));
+            } else {
+                const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+                if (error) throw error;
+                if (!data.user) throw new Error('Unable to sign in. Please try again.');
+                const { data: profile, error: profileError } = await supabase.from('profiles').select('role, full_name').eq('id', data.user.id).single();
+                if (profileError || !profile) throw new Error('Unable to load your profile. Please try signing in again.');
+                const userRole = profile.role === 'teacher' ? 'teacher' : 'student';
+                setCachedProfile({ id: data.user.id, full_name: profile.full_name || '', role: userRole });
+                router.push(safeAuthReturnPath(returnTo) || (userRole === 'teacher' ? '/dashboard/teacher' : '/dashboard/student'));
+            }
+        } catch (error) {
+            setErrorMsg(error instanceof Error ? error.message : 'Unable to complete this request. Please try again.');
+        } finally {
+            setLoading(false);
         }
-        setLoading(false);
     };
 
-    const handleGoogleLogin = async () => {
-        setErrorMsg('');
-        try {
-            const { error } = await supabase.auth.signInWithOAuth({
-                provider: 'google',
-                options: {
-                    redirectTo: `${window.location.origin}/dashboard/teacher`,
-                },
-            });
-            if (error) setErrorMsg(error.message);
-        } catch (err: any) {
-            setErrorMsg(err.message || 'Failed to sign in with Google');
-        }
+    const changeMode = (signUp: boolean) => {
+        setIsSignUp(signUp); setIsRecovering(false); setIsResetting(false); setErrorMsg(''); setInfoMsg('');
     };
 
     if (checkingExisting) {
@@ -139,19 +140,22 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
     return (
         <div className="min-h-screen flex flex-col bg-[#fff5f0]">
             {/* Shared Unified Navbar */}
-            <Navbar isSignUp={isSignUp} onModeChange={setIsSignUp} />
+            <Navbar isSignUp={isSignUp} onModeChange={changeMode} />
 
             {/* Main Content */}
-            <div className="flex-1 flex items-center justify-center p-8">
+            <div id="main-content" tabIndex={-1} className="flex-1 flex items-center justify-center p-4 sm:p-8">
                 <div className="w-full max-w-5xl bg-white rounded-3xl shadow-sm border border-[#f5c4b5] overflow-hidden flex flex-col md:flex-row min-h-[600px]">
 
                     {/* Left Side - Illustration Panel */}
-                    <div className="md:w-[45%] bg-[#faebe3] p-8 sm:p-10 lg:p-12 flex flex-col justify-between relative overflow-hidden">
+                    <div aria-hidden="true" className="hidden md:flex md:w-[45%] bg-[#faebe3] p-8 sm:p-10 lg:p-12 flex-col justify-between relative overflow-hidden">
                         {/* Big Prominent quizeee Brand Logo */}
                         <div className="relative z-10 pt-2">
-                            <img
+                            <Image
                                 src="/quizeee-hero.png"
                                 alt="quizeee"
+                                width={2172}
+                                height={724}
+                                sizes="256px"
                                 className="w-56 sm:w-64 h-auto select-none pointer-events-none drop-shadow-xs"
                             />
                         </div>
@@ -204,30 +208,35 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                     </div>
 
                     {/* Right Side - Form Panel */}
-                    <div className="md:w-[55%] bg-white p-12 lg:px-20 flex flex-col justify-center">
+                    <div className="md:w-[55%] bg-white p-6 sm:p-10 md:p-12 lg:px-20 flex flex-col justify-center">
                         <div className="w-full">
-                            <h2 className="text-[2.5rem] font-mono font-bold text-black mb-3 tracking-tight">
-                                {isSignUp ? 'Create Account' : 'Welcome Back'}
-                            </h2>
+                            <h1 className="text-3xl sm:text-[2.5rem] font-mono font-bold text-black mb-3 tracking-tight">
+                                {isResetting ? 'Set New Password' : isRecovering ? 'Reset Password' : isSignUp ? 'Create Account' : 'Welcome Back'}
+                            </h1>
                             <p className="text-gray-500 font-mono text-sm mb-8">
-                                {isSignUp
+                                {isResetting ? 'Use the recovery link from your email to set a new password.' : isRecovering ? 'Enter your email to receive a recovery link.' : isSignUp
                                     ? 'Create your account to start managing quizzes'
                                     : 'Login to your account'}
                             </p>
 
                             {errorMsg && (
-                                <div className="mb-6 p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-200">
+                                <div id="auth-error" role="alert" className="mb-6 p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-200">
                                     {errorMsg}
                                 </div>
                             )}
+                            {infoMsg && <p role="status" className="mb-6 p-3 bg-green-50 text-green-800 text-sm rounded-lg border border-green-200">{infoMsg}</p>}
 
                             <form onSubmit={handleAuth} className="space-y-6">
-                                {isSignUp && (
+                                {isSignUp && !isRecovering && !isResetting && (
                                     <div className="relative">
                                         <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                                             <span className="text-gray-400 font-mono text-lg">@</span>
                                         </div>
                                         <input
+                                            id="auth-name"
+                                            aria-label="Full name"
+                                            autoComplete="name"
+                                            maxLength={100}
                                             type="text"
                                             required
                                             value={fullName}
@@ -238,11 +247,15 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                                     </div>
                                 )}
 
-                                <div className="relative">
+                                {!isResetting && <div className="relative">
                                     <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                                         <Mail className="w-5 h-5 text-gray-500" />
                                     </div>
                                     <input
+                                        id="auth-email"
+                                        aria-label="Email address"
+                                        autoComplete="email"
+                                        maxLength={254}
                                         type="email"
                                         required
                                         value={email}
@@ -250,13 +263,18 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                                         className="w-full pl-12 pr-4 py-3.5 border border-[#f5c4b5] rounded-xl focus:ring-1 focus:ring-[#E86F47] focus:border-[#E86F47] outline-none font-mono text-sm bg-white text-[#1c1917] font-medium placeholder:text-[#8c827a] transition-colors"
                                         placeholder="Email address"
                                     />
-                                </div>
+                                </div>}
 
-                                <div className="relative">
+                                {!isRecovering && <div className="relative">
                                     <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                                         <Lock className="w-5 h-5 text-gray-500" />
                                     </div>
                                     <input
+                                        id="auth-password"
+                                        aria-label={isResetting ? 'New password' : 'Password'}
+                                        autoComplete={isSignUp || isResetting ? 'new-password' : 'current-password'}
+                                        minLength={isSignUp || isResetting ? 8 : undefined}
+                                        maxLength={128}
                                         type={showPassword ? 'text' : 'password'}
                                         required
                                         value={password}
@@ -266,22 +284,26 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                                     />
                                     <button
                                         type="button"
+                                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                                        aria-pressed={showPassword}
                                         onClick={() => setShowPassword(!showPassword)}
                                         className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-500 hover:text-gray-700 transition-colors"
                                     >
                                         {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                                     </button>
-                                </div>
+                                </div>}
+                                {isResetting && <input type="password" aria-label="Confirm new password" autoComplete="new-password" minLength={8} maxLength={128} required value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} placeholder="Confirm new password" className="w-full px-4 py-3.5 border border-brand-light rounded-xl focus:ring-2 focus:ring-brand font-mono text-sm" />}
 
-                                {isSignUp && (
+                                {isSignUp && !isRecovering && !isResetting && (
                                     <div className="pt-2">
                                         <label className="block text-sm font-mono text-gray-500 mb-3">Register as:</label>
-                                        <div className="grid grid-cols-2 gap-4">
+                                        <div role="group" aria-label="Register as" className="grid grid-cols-2 gap-4">
                                             <button
                                                 type="button"
                                                 onClick={() => setRole('teacher')}
+                                                aria-pressed={role === 'teacher'}
                                                 className={`py-3 rounded-xl font-mono text-sm transition-colors border ${role === 'teacher'
-                                                    ? 'bg-[#E86F47] text-white border-[#E86F47]'
+                                                    ? 'bg-[#E86F47] text-black border-[#E86F47]'
                                                     : 'bg-white text-gray-600 border-[#f5c4b5] hover:bg-[#fff5f0]'
                                                     }`}
                                             >
@@ -290,8 +312,9 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                                             <button
                                                 type="button"
                                                 onClick={() => setRole('student')}
+                                                aria-pressed={role === 'student'}
                                                 className={`py-3 rounded-xl font-mono text-sm transition-colors border ${role === 'student'
-                                                    ? 'bg-[#E86F47] text-white border-[#E86F47]'
+                                                    ? 'bg-[#E86F47] text-black border-[#E86F47]'
                                                     : 'bg-white text-gray-600 border-[#f5c4b5] hover:bg-[#fff5f0]'
                                                     }`}
                                             >
@@ -301,8 +324,8 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                                     </div>
                                 )}
 
-                                {!isSignUp && (
-                                    <div className="flex items-center justify-between pt-1">
+                                {!isSignUp && !isRecovering && !isResetting && (
+                                    <div className="flex flex-wrap gap-2 items-center justify-between pt-1">
                                         <label className="flex items-center gap-2 cursor-pointer select-none">
                                             <input
                                                 type="checkbox"
@@ -312,10 +335,10 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                                             />
                                             <span className="text-sm font-mono text-gray-700">Remember me</span>
                                         </label>
-                                        <a href="#" className="text-sm font-mono text-[#E86F47] hover:underline">Forgot Password?</a>
+                                        <button type="button" onClick={() => { setIsRecovering(true); setErrorMsg(''); setInfoMsg(''); }} className="text-sm font-mono text-brand-ink hover:underline">Forgot Password?</button>
                                     </div>
                                 )}
-                                {isSignUp && (
+                                {isSignUp && !isRecovering && !isResetting && (
                                     <div className="flex items-center justify-between pt-1">
                                         <label className="flex items-center gap-2 cursor-pointer select-none">
                                             <input
@@ -334,7 +357,7 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                                     disabled={loading}
                                     className="w-full py-4 mt-2 bg-[#E86F47] hover:bg-[#d65b33] text-black font-mono font-bold text-lg rounded-xl transition-all shadow-sm"
                                 >
-                                    {loading ? 'Processing...' : isSignUp ? 'Sign Up' : 'Login'}
+                                    {loading ? 'Processing...' : isResetting ? 'Update Password' : isRecovering ? 'Send reset email' : isSignUp ? 'Sign Up' : 'Login'}
                                 </button>
                             </form>
 
@@ -359,12 +382,12 @@ export default function AuthForm({ initialSignUp = false }: AuthFormProps) {
                             </div>
 
                             <div className="mt-8 text-center font-mono text-sm text-black">
-                                {isSignUp ? "Already have an account? " : "Don't have an account? "}
+                                {isRecovering || isResetting ? 'Remember your password? ' : isSignUp ? "Already have an account? " : "Don't have an account? "}
                                 <button
-                                    onClick={() => setIsSignUp(!isSignUp)}
+                                    onClick={() => changeMode(isRecovering || isResetting ? false : !isSignUp)}
                                     className="text-[#E86F47] hover:underline"
                                 >
-                                    {isSignUp ? "Login" : "Sign Up"}
+                                    {isRecovering || isResetting || isSignUp ? 'Login' : 'Sign Up'}
                                 </button>
                             </div>
 

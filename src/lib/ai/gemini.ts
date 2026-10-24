@@ -1,6 +1,8 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import 'server-only';
+import { GoogleGenAI } from '@google/genai';
 import { AI_CONFIG } from './config';
-import { GeneratedQuestion, parseAndNormalizeQuestions } from './types';
+import { parseAndNormalizeQuestions } from './types';
+import type { GeneratedQuestion } from './types';
 
 function getGeminiClient() {
     const { apiKey, model: configuredModel } = AI_CONFIG.gemini;
@@ -9,15 +11,23 @@ function getGeminiClient() {
         throw new Error('Gemini API key is missing. Please set GEMINI_API_KEY in .env.local.');
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const candidateModels = [configuredModel, 'gemini-3.5-flash', 'gemini-flash-latest'].filter(Boolean);
+    const genAI = new GoogleGenAI({
+        apiKey,
+        enterprise: false,
+        httpOptions: {
+            timeout: 60_000,
+            // Candidate-model fallback is managed below, not multiplied by SDK retries.
+            retryOptions: { attempts: 1 },
+        },
+    });
+    const candidateModels = [...new Set([configuredModel, 'gemini-flash-latest'].filter(Boolean))];
 
     return { genAI, candidateModels };
 }
 
 export async function generateQuizWithGemini(
     extractedText: string,
-    questionCount: number
+    questionCount: number,
 ): Promise<GeneratedQuestion[]> {
     const { genAI, candidateModels } = getGeminiClient();
 
@@ -41,23 +51,25 @@ export async function generateQuizWithGemini(
       """
     `;
 
-    let lastError: any = null;
     for (const modelName of candidateModels) {
         try {
-            const model = genAI.getGenerativeModel({
+            const result = await genAI.models.generateContent({
                 model: modelName,
-                generationConfig: { responseMimeType: 'application/json' },
+                contents: prompt,
+                config: {
+                    responseMimeType: 'application/json',
+                    automaticContinuation: false,
+                    abortSignal: AbortSignal.timeout(60_000),
+                },
             });
-            const result = await model.generateContent(prompt);
-            const responseText = result.response.text();
+            const responseText = result.text || '';
             return parseAndNormalizeQuestions(responseText, questionCount);
-        } catch (err: any) {
-            console.warn(`[Gemini Text] Model ${modelName} failed:`, err.message);
-            lastError = err;
+        } catch {
+            console.warn('[Gemini Text] Model request failed.');
         }
     }
 
-    throw lastError || new Error('Failed to generate quiz using Gemini.');
+    throw new Error('Failed to generate quiz using Gemini.');
 }
 
 /**
@@ -65,7 +77,7 @@ export async function generateQuizWithGemini(
  */
 export async function generateQuizFromPdfBufferWithGemini(
     pdfBuffer: Buffer,
-    questionCount: number
+    questionCount: number,
 ): Promise<GeneratedQuestion[]> {
     const { genAI, candidateModels } = getGeminiClient();
     const base64Pdf = pdfBuffer.toString('base64');
@@ -89,42 +101,37 @@ Requirements:
 3. correct_option_index must be an integer between 0 and 3.
 4. Output valid JSON array only, without markdown formatting or surrounding explanations.`;
 
-    let lastError: any = null;
     for (const modelName of candidateModels) {
         try {
-            const model = genAI.getGenerativeModel({
+            const result = await genAI.models.generateContent({
                 model: modelName,
-                generationConfig: { responseMimeType: 'application/json' },
-            });
-
-            const result = await model.generateContent([
-                {
-                    inlineData: {
-                        mimeType: 'application/pdf',
-                        data: base64Pdf,
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [{ inlineData: { mimeType: 'application/pdf', data: base64Pdf } }, { text: prompt }],
                     },
+                ],
+                config: {
+                    responseMimeType: 'application/json',
+                    automaticContinuation: false,
+                    abortSignal: AbortSignal.timeout(60_000),
                 },
-                prompt,
-            ]);
-
-            const responseText = result.response.text();
+            });
+            const responseText = result.text || '';
             return parseAndNormalizeQuestions(responseText, questionCount);
-        } catch (err: any) {
-            console.warn(`[Gemini Multimodal] Model ${modelName} failed:`, err.message);
-            lastError = err;
+        } catch {
+            console.warn('[Gemini Multimodal] Model request failed.');
         }
     }
 
-    throw lastError || new Error('Failed to generate quiz from PDF using Gemini vision.');
+    throw new Error('Failed to generate quiz from PDF using Gemini vision.');
 }
 
 /**
  * Transcribe/extract all visible text, diagram data, and slide content from an image-based PDF.
  * This allows text-only LLMs (like NVIDIA Nemotron) to operate on visual/scanned PDFs.
  */
-export async function extractVisualTextFromPdfBufferWithGemini(
-    pdfBuffer: Buffer
-): Promise<string> {
+export async function extractVisualTextFromPdfBufferWithGemini(pdfBuffer: Buffer): Promise<string> {
     const { genAI, candidateModels } = getGeminiClient();
     const base64Pdf = pdfBuffer.toString('base64');
 
@@ -132,28 +139,29 @@ export async function extractVisualTextFromPdfBufferWithGemini(
 Thoroughly extract and transcribe all slide content, titles, tables, bullet points, comparisons, architecture layers, and diagram explanations from this document.
 Format the output as comprehensive, detailed study notes that cover all factual details, terms, and concepts in depth.`;
 
-    let lastError: any = null;
     for (const modelName of candidateModels) {
         try {
-            const model = genAI.getGenerativeModel({ model: modelName });
-            const result = await model.generateContent([
-                {
-                    inlineData: {
-                        mimeType: 'application/pdf',
-                        data: base64Pdf,
+            const result = await genAI.models.generateContent({
+                model: modelName,
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [{ inlineData: { mimeType: 'application/pdf', data: base64Pdf } }, { text: prompt }],
                     },
+                ],
+                config: {
+                    automaticContinuation: false,
+                    abortSignal: AbortSignal.timeout(60_000),
                 },
-                prompt,
-            ]);
-            const text = result.response.text();
+            });
+            const text = result.text || '';
             if (text && text.trim().length > 50) {
                 return text;
             }
-        } catch (err: any) {
-            console.warn(`[Gemini Visual OCR] Model ${modelName} failed:`, err.message);
-            lastError = err;
+        } catch {
+            console.warn('[Gemini Visual OCR] Model request failed.');
         }
     }
 
-    throw lastError || new Error('Failed to transcribe visual PDF using Gemini vision.');
+    throw new Error('Failed to transcribe visual PDF using Gemini vision.');
 }

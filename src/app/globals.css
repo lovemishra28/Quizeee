@@ -2,6 +2,8 @@
 
 @theme {
   --color-brand: #E86F47;
+  --color-brand-ink: #a83f1c;
+  --color-muted: #69594f;
   --color-brand-light: #f5c4b5;
   --color-brand-lightest: #fbe6df;
   --color-bg: #fff5f0;
@@ -20,13 +22,17 @@ body {
   color: var(--foreground);
 }
 
+:where(h1, h2, h3, h4, p, li, label, button, a) {
+  overflow-wrap: anywhere;
+}
+
 input, textarea, select {
   color: #1c1917;
   color-scheme: light;
 }
 
 input::placeholder, textarea::placeholder {
-  color: #8c827a;
+  color: var(--color-muted);
   opacity: 1;
 }
 
@@ -41,5 +47,52 @@ input::placeholder, textarea::placeholder {
 
   100% {
     transform: translateX(-50%);
+  }
+}
+
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-brand-ink);
+  outline-offset: 3px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* Keep legacy Tailwind text utilities aligned with the shared accessible ink tokens.
+   Brand fills and illustrations retain their original orange. */
+[class~="text-brand"], [class~="text-[#E86F47]"] {
+  color: var(--color-brand-ink);
+}
+
+[class~="text-gray-500"], [class~="text-[#8c827a]"] {
+  color: var(--color-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  [data-decorative-motion] {
+    display: none;
+  }
+
+  [data-feature-ticker] {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  [data-feature-copy] {
+    display: none;
+  }
+
+  [data-feature-ticker] > div {
+    flex-wrap: wrap;
+    justify-content: center;
   }
 }

@@ -1,15 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { BarChart3, FilePlus2, Home, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import DashboardNavbar from '@/components/DashboardNavbar';
 import DashboardLoading from '@/components/DashboardLoading';
-import { getCachedProfile, setCachedProfile, markClientHydrated, getCachedProfileDirect } from '@/lib/authCache';
+import { getCachedProfile, setCachedProfile, markClientHydrated } from '@/lib/authCache';
 
 type AnalyticsSession = {
   id: string;
+  quiz_id: string;
   status: string;
   created_at: string;
   quizzes: { title: string; type: string; available_until?: string | null } | { title: string; type: string; available_until?: string | null }[] | null;
@@ -21,6 +21,7 @@ export default function TeacherAnalyticsIndex() {
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState(cached?.full_name || '');
   const [sessions, setSessions] = useState<AnalyticsSession[]>([]);
+  const [loadError, setLoadError] = useState('');
   const [currentTime, setCurrentTime] = useState(() => Date.now());
 
   useEffect(() => {
@@ -30,10 +31,6 @@ export default function TeacherAnalyticsIndex() {
 
   useEffect(() => {
     markClientHydrated();
-    const storedProfile = getCachedProfileDirect();
-    if (storedProfile) {
-      setUserName(storedProfile.full_name);
-    }
 
     async function loadSessions() {
       const {
@@ -62,39 +59,33 @@ export default function TeacherAnalyticsIndex() {
       });
       const { data: sessionData, error } = await supabase
         .from('quiz_sessions')
-        .select('id, status, created_at, quizzes!inner(title, type, teacher_id, available_until)')
+        .select('id, quiz_id, status, created_at, quizzes!inner(title, type, teacher_id, available_until)')
         .eq('quizzes.teacher_id', user.id)
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('Failed to load analytics sessions', error);
+        setLoadError('Unable to load analytics sessions. Please try again.');
       } else {
         // Filter out duplicate or orphaned 'waiting' sessions for competitive quizzes:
         // When a competitive quiz has a played session (status != 'waiting'), any unplayed 'waiting'
         // lobby for that same quiz is excluded so duplicate entries never appear in Analytics.
-        const validSessions = (sessionData || []).filter((session: any) => {
+        const playedQuizIds = new Set((sessionData || []).filter(session => session.status !== 'waiting').map(session => session.quiz_id));
+        const validSessions = (sessionData || []).filter(session => {
           const quiz = Array.isArray(session.quizzes) ? session.quizzes[0] : session.quizzes;
           if (quiz?.type === 'static') return true;
 
           // For competitive quizzes:
           if (session.status !== 'waiting') return true;
 
-          // If status is 'waiting', only show it if there is NO played session for the same quiz title
-          const hasPlayedSession = (sessionData || []).some((other: any) => {
-            if (other.id === session.id) return false;
-            const otherQuiz = Array.isArray(other.quizzes) ? other.quizzes[0] : other.quizzes;
-            return otherQuiz?.title === quiz?.title && other.status !== 'waiting';
-          });
-
-          return !hasPlayedSession;
+          return !playedQuizIds.has(session.quiz_id);
         });
 
-        setSessions(validSessions as AnalyticsSession[]);
+        setSessions(validSessions as unknown as AnalyticsSession[]);
       }
       setLoading(false);
     }
 
-    void loadSessions();
+    void loadSessions().catch(() => { setLoadError('Unable to load analytics. Please try again.'); setLoading(false); });
   }, [router]);
 
   const handleSignOut = async () => {
@@ -117,7 +108,8 @@ export default function TeacherAnalyticsIndex() {
       {loading && sessions.length === 0 ? (
         <DashboardLoading />
       ) : (
-        <main className="max-w-6xl w-full mx-auto p-6 mt-4 relative z-10">
+        <main id="main-content" className="max-w-6xl w-full mx-auto p-4 sm:p-6 mt-4 relative z-10">
+        {loadError && <p role="alert" className="rounded-xl p-4 mb-6 bg-red-50 text-red-700">{loadError} <button className="underline font-bold" onClick={() => window.location.reload()}>Retry</button></p>}
         <h1 className="text-5xl font-bold font-mono tracking-tighter text-black">Quiz Analytics</h1>
         <p className="mt-2 text-gray-600 font-mono">Choose a quiz session to view classroom performance.</p>
 
@@ -145,7 +137,7 @@ export default function TeacherAnalyticsIndex() {
                   className="w-full bg-transparent border-b border-brand-light border-dashed transition-all duration-200 block text-left"
                 >
                   <div className="p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center hover:bg-brand-lightest/50 rounded-xl gap-4">
-                    <div className="flex flex-col gap-2 min-w-0 flex-1">
+                    <div className="flex flex-col gap-2 min-w-0 w-full sm:w-auto flex-1">
                       <h2 className="text-3xl font-normal font-mono text-black truncate" title={quiz?.title || 'Untitled quiz'}>{quiz?.title || 'Untitled quiz'}</h2>
                       <div className="flex items-center space-x-4">
                         <span className="text-xs font-mono text-gray-600 font-bold">
@@ -153,14 +145,14 @@ export default function TeacherAnalyticsIndex() {
                         </span>
                       </div>
                     </div>
-                    <div className="mt-4 sm:mt-0 flex gap-4 shrink-0">
-                      <div className="w-40 py-2 border-2 border-brand-light rounded-xl text-center">
-                        <span className={`text-xl font-mono font-bold text-brand capitalize`}>
+                    <div className="mt-4 sm:mt-0 grid grid-cols-2 gap-2 w-full sm:w-auto sm:flex sm:gap-4 shrink-0">
+                      <div className="min-w-0 sm:w-40 py-2 border-2 border-brand-light rounded-xl text-center">
+                        <span className="text-base sm:text-xl font-mono font-bold text-brand capitalize">
                           {quiz?.type || 'quiz'}
                         </span>
                       </div>
-                      <div className="w-40 py-2 border-2 border-brand-light bg-brand-light rounded-xl text-center">
-                        <span className={`text-xl font-mono font-bold text-black capitalize`}>
+                      <div className="min-w-0 sm:w-40 py-2 border-2 border-brand-light bg-brand-light rounded-xl text-center">
+                        <span className="text-base sm:text-xl font-mono font-bold text-black capitalize">
                           {displayStatus}
                         </span>
                       </div>

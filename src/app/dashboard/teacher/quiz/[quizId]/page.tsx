@@ -7,7 +7,8 @@ import { BookOpen, Users, CheckCircle, BarChart2, ArrowLeft, Clock, Calendar } f
 import DashboardNavbar from '@/components/DashboardNavbar';
 import DashboardBackground from '@/components/DashboardBackground';
 import DashboardLoading from '@/components/DashboardLoading';
-import { getCachedProfile, setCachedProfile, markClientHydrated, getCachedProfileDirect } from '@/lib/authCache';
+import { getCachedProfile, setCachedProfile, markClientHydrated } from '@/lib/authCache';
+import type { Quiz, Question } from '@/lib/types';
 
 const formatDisplayDate = (dateStr: string) => {
     if (!dateStr) return '';
@@ -33,21 +34,19 @@ export default function TeacherQuizDetails({ params }: { params: Promise<{ quizI
     const cached = getCachedProfile();
     const [userName, setUserName] = useState(cached?.full_name || '');
     const [loading, setLoading] = useState(true);
-    const [quiz, setQuiz] = useState<any>(null);
-    const [quizQuestions, setQuizQuestions] = useState<any[]>([]);
-    const [studentScores, setStudentScores] = useState<any[]>([]);
+    const [quiz, setQuiz] = useState<Quiz | null>(null);
+    const [quizQuestions, setQuizQuestions] = useState<Question[]>([]);
+    const [studentScores, setStudentScores] = useState<{ name: string; score: number; correctAnswers: number }[]>([]);
+    const [loadError, setLoadError] = useState('');
 
     useEffect(() => {
         markClientHydrated();
-        const storedProfile = getCachedProfileDirect();
-        if (storedProfile) {
-            setUserName(storedProfile.full_name);
-        }
 
         async function fetchQuizDetails() {
             try {
                 // Fetch User
                 const { data: { user } } = await supabase.auth.getUser();
+                if (!user) { router.replace('/auth'); return; }
                 if (user) {
                     const { data: profile } = await supabase
                         .from('profiles')
@@ -55,6 +54,7 @@ export default function TeacherQuizDetails({ params }: { params: Promise<{ quizI
                         .eq('id', user.id)
                         .single();
 
+                    if (!profile || profile.role !== 'teacher') { router.replace('/dashboard/student'); return; }
                     if (profile) {
                         setUserName(profile.full_name);
                         setCachedProfile({
@@ -70,11 +70,11 @@ export default function TeacherQuizDetails({ params }: { params: Promise<{ quizI
                     .from('quizzes')
                     .select('*')
                     .eq('id', quizId)
+                    .eq('teacher_id', user.id)
                     .single();
 
                 if (quizError || !quizData) {
-                    alert('Quiz not found.');
-                    router.push('/dashboard/teacher');
+                    setLoadError('This quiz is unavailable or belongs to another teacher.');
                     return;
                 }
 
@@ -83,16 +83,17 @@ export default function TeacherQuizDetails({ params }: { params: Promise<{ quizI
                     router.push('/dashboard/teacher');
                     return;
                 }
-                setQuiz(quizData);
+                setQuiz(quizData as Quiz);
 
                 // 2. Fetch questions
-                const { data: questions } = await supabase
+                const { data: questions, error: questionsError } = await supabase
                     .from('questions')
                     .select('*')
                     .eq('quiz_id', quizId)
                     .order('order_index', { ascending: true });
 
-                setQuizQuestions(questions || []);
+                if (questionsError) throw new Error('Unable to load the questions.');
+                setQuizQuestions((questions || []) as Question[]);
 
                 if (questions && questions.length > 0) {
                     const questionIds = questions.map(q => q.id);
@@ -107,11 +108,11 @@ export default function TeacherQuizDetails({ params }: { params: Promise<{ quizI
                         // Aggregate scores per student
                         const scoresMap: Record<string, { name: string, score: number, correctAnswers: number }> = {};
 
-                        submissionsData.forEach((sub: any) => {
+                        submissionsData.forEach(sub => {
                             const sId = sub.student_id;
                             if (!scoresMap[sId]) {
                                 scoresMap[sId] = {
-                                    name: sub.profiles?.full_name || 'Unknown Student',
+                                    name: (Array.isArray(sub.profiles) ? sub.profiles[0] : sub.profiles)?.full_name || 'Unknown Student',
                                     score: 0,
                                     correctAnswers: 0,
                                 };
@@ -131,8 +132,8 @@ export default function TeacherQuizDetails({ params }: { params: Promise<{ quizI
                 } else {
                     setStudentScores([]);
                 }
-            } catch (error) {
-                console.error('Error fetching quiz details', error);
+            } catch {
+                setLoadError('Unable to load quiz details. Please try again.');
             } finally {
                 setLoading(false);
             }
@@ -155,6 +156,7 @@ export default function TeacherQuizDetails({ params }: { params: Promise<{ quizI
             </div>
         );
     }
+    if (!quiz) return <main id="main-content" className="min-h-screen bg-bg flex flex-col items-center justify-center p-6 font-mono"><h1 className="text-3xl font-bold text-black mb-4">Quiz unavailable</h1><p role="alert" className="text-muted mb-6">{loadError || 'This quiz could not be loaded.'}</p><button onClick={() => router.push('/dashboard/teacher')} className="bg-brand text-black rounded-xl px-6 py-3">Return to Dashboard</button></main>;
 
     return (
         <div className="min-h-screen bg-[#fff5f0] text-foreground font-mono relative flex flex-col selection:bg-[#E86F47] selection:text-white pb-16">
@@ -169,7 +171,8 @@ export default function TeacherQuizDetails({ params }: { params: Promise<{ quizI
                 activeTab="dashboard"
             />
 
-            <main className="max-w-6xl w-full mx-auto p-6 space-y-6 mt-4 relative z-10">
+            <main id="main-content" className="max-w-6xl w-full mx-auto p-4 sm:p-6 space-y-6 mt-4 relative z-10">
+                {loadError && <p role="alert" className="rounded-xl p-4 bg-red-50 text-red-700">{loadError}</p>}
                 {/* Back Link & Header Card */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <button
@@ -225,16 +228,16 @@ export default function TeacherQuizDetails({ params }: { params: Promise<{ quizI
                     {/* Left Column: Questions List */}
                     <div className="bg-white/90 backdrop-blur-md rounded-2xl border-2 border-brand-light shadow-sm overflow-hidden flex flex-col h-[720px]">
                         <div className="p-5 border-b-2 border-brand-light bg-[#fbf5f0] flex items-center justify-between">
-                            <h4 className="font-bold text-black flex items-center text-lg font-mono">
+                            <h2 className="font-bold text-black flex items-center text-lg font-mono">
                                 <BookOpen className="w-5 h-5 mr-2.5 text-brand" />
                                 Questions & Answers
-                            </h4>
+                            </h2>
                             <span className="text-xs font-bold font-mono bg-white border border-brand-light text-black px-3 py-1 rounded-xl shadow-2xs">
                                 {quizQuestions.length} Total
                             </span>
                         </div>
 
-                        <div className="p-6 overflow-y-auto flex-1 space-y-6">
+                        <div tabIndex={0} role="region" aria-label="Quiz questions and answers" className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-6">
                             {quizQuestions.map((q, idx) => (
                                 <div key={q.id} className="p-5 bg-white rounded-xl border-2 border-brand-light/70 shadow-2xs hover:border-brand transition">
                                     <p className="font-bold text-black mb-4 text-base font-mono leading-relaxed">
@@ -276,16 +279,16 @@ export default function TeacherQuizDetails({ params }: { params: Promise<{ quizI
                     {/* Right Column: Student Scores */}
                     <div className="bg-white/90 backdrop-blur-md rounded-2xl border-2 border-brand-light shadow-sm overflow-hidden flex flex-col h-[720px]">
                         <div className="p-5 border-b-2 border-brand-light bg-[#fbf5f0] flex items-center justify-between">
-                            <h4 className="font-bold text-black flex items-center text-lg font-mono">
+                            <h2 className="font-bold text-black flex items-center text-lg font-mono">
                                 <Users className="w-5 h-5 mr-2.5 text-brand" />
                                 Student Performance
-                            </h4>
+                            </h2>
                             <span className="text-xs font-bold font-mono bg-white border border-brand-light text-black px-3 py-1 rounded-xl shadow-2xs">
                                 {studentScores.length} Submissions
                             </span>
                         </div>
 
-                        <div className="p-0 overflow-y-auto flex-1">
+                        <div tabIndex={0} role="region" aria-label="Student performance results" className="p-0 overflow-auto flex-1">
                             {studentScores.length === 0 ? (
                                 <div className="flex flex-col items-center justify-center h-full text-[#8c827a] p-8 text-center">
                                     <BarChart2 className="w-16 h-16 mb-4 opacity-30 text-brand" />

@@ -1,49 +1,10 @@
 'use server';
 
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey, {
-    auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-    },
-});
-
-const INSTANT_HOST_EMAIL = 'instanthost@quizeee.app';
-const INSTANT_HOST_PASSWORD = 'InstantHostPassword123!@#';
-
-/**
- * Ensures a designated system guest host user exists in Supabase Auth & Profiles.
- */
-async function getOrCreateInstantHostUser() {
-    const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
-    let hostUser = usersData?.users?.find((u) => u.email === INSTANT_HOST_EMAIL);
-
-    if (!hostUser) {
-        const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
-            email: INSTANT_HOST_EMAIL,
-            password: INSTANT_HOST_PASSWORD,
-            email_confirm: true,
-            user_metadata: { full_name: 'Instant Host' },
-        });
-
-        if (createError || !newUser?.user) {
-            throw new Error(`Failed to initialize instant host: ${createError?.message}`);
-        }
-        hostUser = newUser.user;
-
-        await supabaseAdmin.from('profiles').upsert({
-            id: hostUser.id,
-            full_name: 'Instant Host',
-            role: 'teacher',
-        });
-    }
-
-    return hostUser;
-}
+import { randomBytes, randomInt, randomUUID } from 'node:crypto';
+import { isRecord, validateQuizQuestions } from '@/lib/quizValidation';
+import { ActionError, logActionError, publicActionError } from '@/lib/server/errors';
+import { getSupabaseAdmin } from '@/lib/server/supabase';
+import { limitPublicAction } from '@/lib/server/rateLimit';
 
 export interface InstantQuestionInput {
     question_text: string;
@@ -59,167 +20,85 @@ export interface CreateInstantQuizParams {
     perQuestionTimer?: number;
 }
 
-/**
- * Creates an instant competitive quiz and initializes a live room session.
- * No user login required by caller. Uses secure admin credentials on server.
- */
-export async function createInstantQuizAction({
-    title,
-    questions,
-    perQuestionTimer = 30,
-}: CreateInstantQuizParams) {
+// Each guest receives an isolated account; no reusable system-host identity is distributed.
+async function createGuestAccount(fullName: string, role: 'teacher' | 'student') {
+    const admin = getSupabaseAdmin();
+    const email = `guest_${role}_${randomUUID()}@guest.quizeee.internal`;
+    const password = `Guest_A1!${randomBytes(32).toString('base64url')}`;
+    const { data, error } = await admin.auth.admin.createUser({
+        email, password, email_confirm: true,
+        user_metadata: { full_name: fullName, role, is_guest: true },
+    });
+    if (error || !data.user) throw new Error('Guest account creation failed');
+    const { error: profileError } = await admin.from('profiles').upsert({ id: data.user.id, full_name: fullName, role });
+    if (profileError) throw new Error('Guest profile creation failed');
+    return { id: data.user.id, email, password };
+}
+
+export async function createInstantQuizAction(input: CreateInstantQuizParams) {
     try {
-        if (!questions || questions.length === 0) {
-            throw new Error('At least one question is required to create a quiz.');
+        if (!isRecord(input) || typeof input.title !== 'string' || input.title.trim().length > 200) {
+            throw new ActionError('Enter a quiz title of at most 200 characters.');
         }
+        let questions;
+        try { questions = validateQuizQuestions(input.questions); }
+        catch (error) { throw new ActionError(error instanceof Error ? error.message : 'Review the quiz questions.'); }
+        const timer = input.perQuestionTimer ?? 30;
+        if (!Number.isInteger(timer) || timer < 1 || timer > 300) throw new ActionError('Choose a question timer between 1 and 300 seconds.');
+        await limitPublicAction('instant-create', 5);
+        const admin = getSupabaseAdmin();
+        const host = await createGuestAccount('Instant Host', 'teacher');
+        const { data: quiz, error: quizError } = await admin.from('quizzes').insert({
+            teacher_id: host.id,
+            title: input.title.trim() || 'Instant Competitive Quiz',
+            type: 'competitive', per_question_timer: timer,
+            description: 'Instant competitive quiz (temporary)',
+        }).select('id').single();
+        if (quizError || !quiz) throw new Error('Quiz creation failed');
 
-        const hostUser = await getOrCreateInstantHostUser();
-
-        // 1. Insert into quizzes table (competitive only, temporary session)
-        const quizTitle = title.trim() || 'Instant Competitive Quiz';
-        const { data: quizData, error: quizError } = await supabaseAdmin
-            .from('quizzes')
-            .insert({
-                teacher_id: hostUser.id,
-                title: quizTitle,
-                type: 'competitive',
-                per_question_timer: perQuestionTimer,
-                description: 'Instant competitive quiz (temporary)',
-            })
-            .select()
-            .single();
-
-        if (quizError || !quizData) {
-            throw new Error(quizError?.message || 'Failed to create instant quiz.');
+        try {
+            const { error: questionsError } = await admin.from('questions').insert(questions.map((question, index) => ({ ...question, quiz_id: quiz.id, order_index: index + 1 })));
+            if (questionsError) throw new Error('Question creation failed');
+            const roomCode = randomInt(100000, 1000000).toString();
+            const { data: session, error: sessionError } = await admin.from('quiz_sessions').insert({
+                quiz_id: quiz.id, room_code: roomCode, status: 'waiting', current_question_index: -1,
+            }).select('id, room_code').single();
+            if (sessionError || !session) throw new Error('Room creation failed');
+            return { success: true, quizId: quiz.id, sessionId: session.id, roomCode: session.room_code, hostEmail: host.email, hostPassword: host.password };
+        } catch (error) {
+            // Compensate only records created by this request. Database transactions remain a launch requirement.
+            const { error: questionCleanupError } = await admin.from('questions').delete().eq('quiz_id', quiz.id);
+            const { error: quizCleanupError } = await admin.from('quizzes').delete().eq('id', quiz.id);
+            if (questionCleanupError || quizCleanupError) logActionError('instant-create-cleanup', error);
+            throw error;
         }
-
-        // 2. Insert questions
-        const questionsToInsert = questions.map((q, idx) => ({
-            quiz_id: quizData.id,
-            question_text: q.question_text,
-            options: q.options,
-            correct_option_index: q.correct_option_index,
-            explanation: q.explanation || '',
-            subtopic: q.subtopic || 'General',
-            order_index: idx + 1,
-        }));
-
-        const { error: questionsError } = await supabaseAdmin
-            .from('questions')
-            .insert(questionsToInsert);
-
-        if (questionsError) {
-            // Rollback quiz
-            await supabaseAdmin.from('quizzes').delete().eq('id', quizData.id);
-            throw new Error(questionsError.message || 'Failed to save questions.');
-        }
-
-        // 3. Generate a 6-digit room code
-        let roomCode = Math.floor(100000 + Math.random() * 900000).toString();
-
-        // Create waiting live session
-        const { data: sessionData, error: sessionError } = await supabaseAdmin
-            .from('quiz_sessions')
-            .insert({
-                quiz_id: quizData.id,
-                room_code: roomCode,
-                status: 'waiting',
-                current_question_index: -1,
-            })
-            .select()
-            .single();
-
-        if (sessionError || !sessionData) {
-            throw new Error(sessionError?.message || 'Failed to initialize live room session.');
-        }
-
-        return {
-            success: true,
-            quizId: quizData.id,
-            sessionId: sessionData.id,
-            roomCode,
-            hostEmail: INSTANT_HOST_EMAIL,
-            hostPassword: INSTANT_HOST_PASSWORD,
-        };
-    } catch (err: any) {
-        console.error('[createInstantQuizAction Error]', err);
-        return {
-            success: false,
-            error: err.message || 'Failed to create instant quiz.',
-        };
+    } catch (error) {
+        logActionError('instant-create', error);
+        return { success: false, error: publicActionError(error, 'Unable to create the quiz room. Please try again.') };
     }
 }
 
-/**
- * Validates a room code and creates an instant guest student account to participate live.
- */
-export async function joinInstantQuizAction({
-    roomCode,
-    nickname,
-}: {
-    roomCode: string;
-    nickname: string;
-}) {
+export async function joinInstantQuizAction(input: { roomCode: string; nickname: string }) {
     try {
-        const cleanCode = roomCode.trim().replace(/\s+/g, '');
-        const cleanName = nickname.trim() || 'Player';
-
-        if (!cleanCode || cleanCode.length < 4) {
-            throw new Error('Please enter a valid room code.');
+        if (!isRecord(input) || typeof input.roomCode !== 'string' || !/^\d{6}$/.test(input.roomCode.trim())) {
+            throw new ActionError('Please enter a valid 6-digit room code.');
         }
-
-        // 1. Verify the session exists and is active or waiting
-        const { data: sessionData, error: sessionError } = await supabaseAdmin
-            .from('quiz_sessions')
-            .select('id, quiz_id, status, room_code')
-            .eq('room_code', cleanCode)
-            .in('status', ['waiting', 'active', 'leaderboard', 'finished'])
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .single();
-
-        if (sessionError || !sessionData) {
-            throw new Error('No active quiz found for room code: ' + cleanCode);
+        if (typeof input.nickname !== 'string' || !input.nickname.trim() || input.nickname.trim().length > 24) {
+            throw new ActionError('Enter a nickname between 1 and 24 characters.');
         }
-
-        // 2. Generate a lightweight guest credentials
-        const unique = Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
-        const guestEmail = `guest_${unique}@guest.quizeee.internal`;
-        const guestPassword = `Guest!_${unique}`;
-
-        const { data: userData, error: userError } = await supabaseAdmin.auth.admin.createUser({
-            email: guestEmail,
-            password: guestPassword,
-            email_confirm: true,
-            user_metadata: { full_name: cleanName },
-        });
-
-        if (userError || !userData?.user) {
-            throw new Error('Unable to create guest session: ' + userError?.message);
-        }
-
-        // 3. Upsert profile as student
-        await supabaseAdmin.from('profiles').upsert({
-            id: userData.user.id,
-            full_name: cleanName,
-            role: 'student',
-        });
-
-        return {
-            success: true,
-            roomCode: sessionData.room_code,
-            sessionId: sessionData.id,
-            quizId: sessionData.quiz_id,
-            studentId: userData.user.id,
-            nickname: cleanName,
-            guestEmail,
-            guestPassword,
-        };
-    } catch (err: any) {
-        console.error('[joinInstantQuizAction Error]', err);
-        return {
-            success: false,
-            error: err.message || 'Unable to join quiz room.',
-        };
+        // Accommodate a classroom behind one shared school/NAT address.
+        await limitPublicAction('guest-join', 200);
+        const admin = getSupabaseAdmin();
+        const { data: session, error } = await admin.from('quiz_sessions')
+            .select('id, quiz_id, status, room_code, quizzes(type)')
+            .eq('room_code', input.roomCode.trim()).in('status', ['waiting', 'active'])
+            .order('created_at', { ascending: false }).limit(1).single();
+        const quiz = Array.isArray(session?.quizzes) ? session.quizzes[0] : session?.quizzes;
+        if (error || !session || quiz?.type !== 'competitive') throw new ActionError('No open live quiz was found for this room code.', 'ROOM_UNAVAILABLE');
+        const guest = await createGuestAccount(input.nickname.trim(), 'student');
+        return { success: true, roomCode: session.room_code, sessionId: session.id, quizId: session.quiz_id, studentId: guest.id, nickname: input.nickname.trim(), guestEmail: guest.email, guestPassword: guest.password };
+    } catch (error) {
+        logActionError('guest-join', error);
+        return { success: false, error: publicActionError(error, 'Unable to join this room. Please try again.') };
     }
 }

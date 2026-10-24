@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { processStudyMaterial } from '@/actions/generateQuiz';
 import { createInstantQuizAction } from '@/actions/instantQuiz';
+import { MAX_UPLOAD_BYTES, validateQuizQuestions } from '@/lib/quizValidation';
+import { setCachedProfile, setRememberMeActive } from '@/lib/authCache';
 import {
     Search,
     Upload,
@@ -42,6 +44,10 @@ export default function InstantQuizSection() {
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
+            if (!/\.(pdf|txt)$/i.test(file.name) || file.size > MAX_UPLOAD_BYTES) {
+                setCreateError('Upload a PDF or text file of 10 MB or smaller.');
+                return;
+            }
             setSelectedFile(file);
             setCreateError('');
         }
@@ -81,19 +87,12 @@ export default function InstantQuizSection() {
 
             const res = await processStudyMaterial(formData);
 
-            if (!res.success || !res.questions || res.questions.length === 0) {
-                throw new Error(res.error || 'Failed to generate questions. Please try again.');
-            }
+            if (!res.success) throw new Error(res.error);
+            if (!res.questions.length) throw new Error('Failed to generate questions. Please try again.');
 
-            const mapped = res.questions.map((q: any) => ({
-                question_text: q.question_text,
-                options: q.options || ['', '', '', ''],
-                correct_option_index: q.correct_option_index ?? 0,
-                explanation: q.explanation || '',
-                subtopic: q.subtopic || 'General',
-            }));
+            const mapped = validateQuizQuestions(res.questions, questionCount);
 
-            const quizTitle = cleanTopic || selectedFile?.name.replace(/\.[^/.]+$/, '') || 'Instant Competitive Quiz';
+            const quizTitle = (cleanTopic || selectedFile?.name.replace(/\.[^/.]+$/, '') || 'Instant Competitive Quiz').slice(0, 200);
 
             const createRes = await createInstantQuizAction({
                 title: quizTitle,
@@ -106,15 +105,18 @@ export default function InstantQuizSection() {
             }
 
             // Sign into the instant host account in browser
-            await supabase.auth.signInWithPassword({
+            setRememberMeActive(false);
+            const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
                 email: createRes.hostEmail,
                 password: createRes.hostPassword,
             });
+            if (authError || !authData.user) throw new Error('The quiz was created, but host sign-in failed. Please try again.');
+            setCachedProfile({ id: authData.user.id, full_name: 'Instant Host', role: 'teacher' });
 
             router.push(`/quiz/live/host/${createRes.quizId}?instant=true`);
-        } catch (err: any) {
-            console.error('Instant quiz creation error:', err);
-            setCreateError(err.message || 'Could not generate quiz. Please retry.');
+        } catch (err) {
+            setCreateError(err instanceof Error ? err.message : 'Could not generate quiz. Please retry.');
+        } finally {
             setIsGenerating(false);
         }
     };
@@ -127,7 +129,7 @@ export default function InstantQuizSection() {
         setJoinError('');
 
         const cleanCode = roomCodeInput.trim().replace(/\D/g, '');
-        if (!cleanCode || cleanCode.length < 4) {
+        if (!/^\d{6}$/.test(cleanCode)) {
             setJoinError('Please enter a valid 6-digit room code.');
             return;
         }
@@ -248,10 +250,10 @@ export default function InstantQuizSection() {
                             </span>
 
                             {/* Main Heading */}
-                            <h3 className="text-3xl sm:text-4xl lg:text-[44px] font-black font-mono text-[#1f1a17] tracking-tight leading-[1.12]">
+                            <h2 className="text-3xl sm:text-4xl lg:text-[44px] font-black font-mono text-[#1f1a17] tracking-tight leading-[1.12]">
                                 Generate an<br />
                                 <span className="text-[#E86F47]">Instant Quiz.</span>
-                            </h3>
+                            </h2>
 
                             {/* Consolidated Input Bar with Upload icon inside */}
                             <form onSubmit={handleGenerateQuiz} className="w-full space-y-3.5 pt-1">
@@ -260,6 +262,9 @@ export default function InstantQuizSection() {
 
                                     <input
                                         type="text"
+                                        aria-label="Topic or study notes"
+                                        maxLength={120000}
+                                        disabled={isGenerating}
                                         value={topicInput}
                                         onChange={(e) => {
                                             setTopicInput(e.target.value);
@@ -275,6 +280,8 @@ export default function InstantQuizSection() {
                                         onClick={() => fileInputRef.current?.click()}
                                         className="absolute right-2.5 p-2 rounded-xl text-[#8c827a] hover:text-[#E86F47] hover:bg-[#faebe3] transition cursor-pointer"
                                         title="Upload PDF notes or document"
+                                        aria-label="Upload PDF or text notes"
+                                        disabled={isGenerating}
                                     >
                                         <Upload className="w-4 h-4" />
                                     </button>
@@ -283,6 +290,7 @@ export default function InstantQuizSection() {
                                     <input
                                         ref={fileInputRef}
                                         type="file"
+                                        aria-label="Study material file"
                                         accept=".pdf,.txt"
                                         onChange={handleFileChange}
                                         className="hidden"
@@ -297,6 +305,7 @@ export default function InstantQuizSection() {
                                         <button
                                             type="button"
                                             onClick={handleClearFile}
+                                            aria-label="Remove selected file"
                                             className="text-[#8c827a] hover:text-black transition cursor-pointer"
                                         >
                                             <X className="w-3.5 h-3.5" />
@@ -306,7 +315,7 @@ export default function InstantQuizSection() {
 
                                 {/* Error alert */}
                                 {createError && (
-                                    <p className="text-xs font-mono text-red-600 flex items-center gap-1.5">
+                                    <p role="alert" className="text-xs font-mono text-red-600 flex items-center gap-1.5">
                                         <AlertCircle className="w-3.5 h-3.5" />
                                         <span>{createError}</span>
                                     </p>
@@ -317,7 +326,7 @@ export default function InstantQuizSection() {
                                     <button
                                         type="submit"
                                         disabled={isGenerating}
-                                        className="inline-flex items-center gap-2.5 px-6 py-3 rounded-xl bg-[#E86F47] hover:bg-[#d55e37] active:scale-[0.99] text-white font-mono text-sm font-bold shadow-xs transition cursor-pointer disabled:opacity-60"
+                                        className="inline-flex items-center gap-2.5 px-6 py-3 rounded-xl bg-[#E86F47] hover:bg-[#d55e37] active:scale-[0.99] text-black font-mono text-sm font-bold shadow-xs transition cursor-pointer disabled:opacity-60"
                                     >
                                         {isGenerating ? (
                                             <>
@@ -342,9 +351,10 @@ export default function InstantQuizSection() {
                                                     key={num}
                                                     type="button"
                                                     onClick={() => setQuestionCount(num)}
+                                                    aria-pressed={questionCount === num}
                                                     className={`px-2 py-0.5 rounded-lg text-xs font-bold transition cursor-pointer ${
                                                         questionCount === num
-                                                            ? 'bg-[#E86F47] text-white'
+                                                            ? 'bg-[#E86F47] text-black'
                                                             : 'text-[#5c544e] hover:text-black hover:bg-[#faebe3]'
                                                     }`}
                                                 >
@@ -487,10 +497,10 @@ export default function InstantQuizSection() {
                             </span>
 
                             {/* Main Heading */}
-                            <h3 className="text-3xl sm:text-4xl lg:text-[44px] font-black font-mono text-[#1f1a17] tracking-tight leading-[1.12]">
+                            <h2 className="text-3xl sm:text-4xl lg:text-[44px] font-black font-mono text-[#1f1a17] tracking-tight leading-[1.12]">
                                 Join an<br />
                                 <span className="text-[#E86F47]">Instant Quiz.</span>
-                            </h3>
+                            </h2>
 
                             {/* Consolidated 6-Digit Code Input Bar */}
                             <form onSubmit={handleJoinQuiz} className="w-full space-y-3.5 pt-1">
@@ -499,6 +509,9 @@ export default function InstantQuizSection() {
 
                                     <input
                                         type="text"
+                                        aria-label="6-digit room code"
+                                        inputMode="numeric"
+                                        pattern="[0-9]{6}"
                                         maxLength={6}
                                         value={roomCodeInput}
                                         onChange={(e) => {
@@ -512,7 +525,7 @@ export default function InstantQuizSection() {
 
                                 {/* Join Error Alert */}
                                 {joinError && (
-                                    <p className="text-xs font-mono text-red-600 flex items-center gap-1.5">
+                                    <p role="alert" className="text-xs font-mono text-red-600 flex items-center gap-1.5">
                                         <AlertCircle className="w-3.5 h-3.5" />
                                         <span>{joinError}</span>
                                     </p>
@@ -523,7 +536,7 @@ export default function InstantQuizSection() {
                                     <button
                                         type="submit"
                                         disabled={isJoining}
-                                        className="inline-flex items-center gap-2.5 px-6 py-3 rounded-xl bg-[#E86F47] hover:bg-[#d55e37] active:scale-[0.99] text-white font-mono text-sm font-bold shadow-xs transition cursor-pointer disabled:opacity-60"
+                                        className="inline-flex items-center gap-2.5 px-6 py-3 rounded-xl bg-[#E86F47] hover:bg-[#d55e37] active:scale-[0.99] text-black font-mono text-sm font-bold shadow-xs transition cursor-pointer disabled:opacity-60"
                                     >
                                         {isJoining ? (
                                             <>

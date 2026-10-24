@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { getCachedProfileDirect, setCachedProfile, CachedProfile } from '@/lib/authCache';
@@ -20,17 +21,14 @@ export default function Navbar({ isSignUp, onModeChange }: NavbarProps) {
     const [isLoggedIn, setIsLoggedIn] = useState(false);
 
     useEffect(() => {
-        const cached = getCachedProfileDirect();
-        if (cached) {
-            setUserProfile(cached);
-            setIsLoggedIn(true);
-        }
-
         async function verifySession() {
             const { data: { session } } = await supabase.auth.getSession();
-            if (session) {
+            const cached = getCachedProfileDirect();
+            if (session && !session.user.user_metadata?.is_guest) {
                 setIsLoggedIn(true);
-                if (!cached) {
+                if (cached?.id === session.user.id) {
+                    setUserProfile(cached);
+                } else {
                     const { data: profile } = await supabase
                         .from('profiles')
                         .select('id, full_name, role')
@@ -51,10 +49,10 @@ export default function Navbar({ isSignUp, onModeChange }: NavbarProps) {
                 setUserProfile(null);
             }
         }
-        verifySession();
+        void verifySession();
 
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-            if (session) {
+            if (session && !session.user.user_metadata?.is_guest) {
                 setIsLoggedIn(true);
             } else {
                 setIsLoggedIn(false);
@@ -82,22 +80,26 @@ export default function Navbar({ isSignUp, onModeChange }: NavbarProps) {
     const dashboardHref = userProfile?.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student';
 
     return (
-        <nav className="relative z-20 w-full flex justify-between items-center px-6 sm:px-10 h-[64px] border-b border-[#E86F47] bg-[#fff5f0]">
-            <div className="flex items-center">
+        <nav aria-label="Main navigation" className="relative z-20 w-full flex flex-wrap justify-between items-center gap-2 px-4 sm:px-10 min-h-[64px] py-2 border-b border-[#E86F47] bg-[#fff5f0]">
+            <div className="flex items-center shrink-0">
                 <Link href={isLoggedIn ? dashboardHref : '/'} className="flex items-center cursor-pointer" title={isLoggedIn ? 'Go to Dashboard' : 'Quizeee Home'}>
-                    <img
+                    <Image
                         src="/quizeee-nav.png"
                         alt="quizeee"
-                        className="h-7 w-auto select-none"
+                        width={2172}
+                        height={724}
+                        sizes="84px"
+                        className="h-6 sm:h-7 w-auto select-none"
                     />
                 </Link>
             </div>
 
-            <div className="flex items-center gap-2 sm:gap-4 text-[13px] font-mono text-[#382d27]">
+            <div className="w-full sm:w-auto flex flex-wrap items-center justify-between sm:justify-end gap-1 sm:gap-4 text-xs sm:text-[13px] whitespace-nowrap font-mono text-[#382d27]">
                 {!isLoggedIn && (
                     <Link
                         href="/"
-                        className={`px-4 sm:px-5 py-1.5 rounded-full font-medium transition-all ${
+                        aria-current={isHomeActive ? 'page' : undefined}
+                        className={`px-2 sm:px-5 py-1.5 rounded-full font-medium transition-all ${
                             isHomeActive
                                 ? 'bg-[#f0ded4] text-[#2c221e] shadow-xs'
                                 : 'text-[#2c221e] hover:text-[#E86F47]'
@@ -109,7 +111,7 @@ export default function Navbar({ isSignUp, onModeChange }: NavbarProps) {
 
                 <Link
                     href="/#instant-quiz"
-                    className="px-3.5 sm:px-4 py-1.5 rounded-full font-medium text-[#2c221e] hover:text-[#E86F47] hover:bg-[#faebe3] transition-all flex items-center gap-1.5"
+                    className="px-2 sm:px-4 py-1.5 rounded-full font-medium text-[#2c221e] hover:text-[#E86F47] hover:bg-[#faebe3] transition-all flex items-center gap-1.5"
                 >
                     <span className="w-2 h-2 rounded-full bg-brand animate-pulse"></span>
                     <span>Instant Quiz</span>
@@ -119,7 +121,7 @@ export default function Navbar({ isSignUp, onModeChange }: NavbarProps) {
                     <div className="flex items-center gap-2 sm:gap-3">
                         <Link
                             href={userProfile?.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student'}
-                            className="px-4 sm:px-5 py-1.5 rounded-full font-medium shadow-xs transition-all bg-[#E86F47] text-white hover:bg-[#c94e26]"
+                            className="px-4 sm:px-5 py-1.5 rounded-full font-medium shadow-xs transition-all bg-[#E86F47] text-black hover:bg-[#c94e26]"
                         >
                             Dashboard
                         </Link>
@@ -143,7 +145,7 @@ export default function Navbar({ isSignUp, onModeChange }: NavbarProps) {
                             <button
                                 type="button"
                                 onClick={() => onModeChange(false)}
-                                className={`px-3.5 sm:px-4 py-1.5 rounded-full font-medium transition-all cursor-pointer ${
+                                className={`px-2 sm:px-4 py-1.5 rounded-full font-medium transition-all cursor-pointer ${
                                     isLoginActive
                                         ? 'bg-[#f0ded4] text-[#2c221e] shadow-xs'
                                         : 'text-[#2c221e] hover:text-[#E86F47]'
@@ -154,7 +156,7 @@ export default function Navbar({ isSignUp, onModeChange }: NavbarProps) {
                         ) : (
                             <Link
                                 href="/auth"
-                                className={`px-3.5 sm:px-4 py-1.5 rounded-full font-medium transition-all ${
+                                className={`px-2 sm:px-4 py-1.5 rounded-full font-medium transition-all ${
                                     isLoginActive
                                         ? 'bg-[#f0ded4] text-[#2c221e] shadow-xs'
                                         : 'text-[#2c221e] hover:text-[#E86F47]'
@@ -168,10 +170,10 @@ export default function Navbar({ isSignUp, onModeChange }: NavbarProps) {
                             <button
                                 type="button"
                                 onClick={() => onModeChange(true)}
-                                className={`px-4 sm:px-5 py-1.5 rounded-full font-medium shadow-xs transition-all cursor-pointer ${
+                                className={`px-2 sm:px-5 py-1.5 rounded-full font-medium shadow-xs transition-all cursor-pointer ${
                                     isSignUpActive
                                         ? 'bg-[#c94e26] text-white ring-2 ring-[#E86F47]/40'
-                                        : 'bg-[#E86F47] text-white hover:bg-[#c94e26]'
+                                        : 'bg-[#E86F47] text-black hover:bg-[#c94e26]'
                                 }`}
                             >
                                 Sign Up
@@ -179,10 +181,10 @@ export default function Navbar({ isSignUp, onModeChange }: NavbarProps) {
                         ) : (
                             <Link
                                 href="/auth?mode=signup"
-                                className={`px-4 sm:px-5 py-1.5 rounded-full font-medium shadow-xs transition-all ${
+                                className={`px-2 sm:px-5 py-1.5 rounded-full font-medium shadow-xs transition-all ${
                                     isSignUpActive
                                         ? 'bg-[#c94e26] text-white ring-2 ring-[#E86F47]/40'
-                                        : 'bg-[#E86F47] text-white hover:bg-[#c94e26]'
+                                        : 'bg-[#E86F47] text-black hover:bg-[#c94e26]'
                                 }`}
                             >
                                 Sign Up
@@ -194,4 +196,3 @@ export default function Navbar({ isSignUp, onModeChange }: NavbarProps) {
         </nav>
     );
 }
-

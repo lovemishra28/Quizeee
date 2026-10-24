@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
+import Image from 'next/image';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import RoleCards from '@/components/RoleCards';
@@ -10,25 +10,29 @@ import InstantQuizSection from '@/components/InstantQuizSection';
 import DashboardLoading from '@/components/DashboardLoading';
 import DashboardBackground from '@/components/DashboardBackground';
 import { supabase } from '@/lib/supabaseClient';
-import { getCachedProfileDirect, setCachedProfile, hasPotentialSession } from '@/lib/authCache';
+import { getCachedProfileDirect, setCachedProfile } from '@/lib/authCache';
 
 export default function Home() {
   const router = useRouter();
-  const [checkingAuth, setCheckingAuth] = useState(() => hasPotentialSession());
+  const [checkingAuth, setCheckingAuth] = useState(false);
+  const [tickerPaused, setTickerPaused] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
     async function checkAuth() {
-      // 1. Instant check for cached profile
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user.user_metadata?.is_guest) {
+        if (!cancelled) setCheckingAuth(false);
+        return;
+      }
       const cached = getCachedProfileDirect();
-      if (cached?.role) {
+      if (session && cached?.role && cached.id === session.user.id) {
         router.replace(cached.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student');
         return;
       }
 
       // 2. Check Supabase session
-      const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         const { data: profile } = await supabase
           .from('profiles')
@@ -55,7 +59,7 @@ export default function Home() {
       }
     }
 
-    checkAuth();
+    void checkAuth().catch(() => { if (!cancelled) setCheckingAuth(false); });
 
     return () => {
       cancelled = true;
@@ -76,6 +80,8 @@ export default function Home() {
 
       {/* Shared Navbar */}
       <Navbar />
+      <main id="main-content">
+      <h1 className="sr-only">Quizeee — turn study material into interactive quizzes</h1>
 
       {/* Main Hero Container */}
       <div className="relative w-full h-[calc(100vh-64px)] min-h-[580px] flex items-center justify-center overflow-hidden bg-[#fff5f0]">
@@ -83,6 +89,8 @@ export default function Home() {
         {/* --- Background SVG Elements (Blobs & Precise Circuit Lines) --- */}
         <div className="absolute inset-0 w-full h-full pointer-events-none">
           <svg
+            aria-hidden="true"
+            data-decorative-motion
             viewBox="0 0 1024 522"
             preserveAspectRatio="xMidYMid slice"
             className="absolute inset-0 w-full h-full"
@@ -217,13 +225,17 @@ export default function Home() {
         </div>
 
         {/* Main Hero Logo - Adjust width & max-width classes below to scale size */}
-        <main className="relative z-10 flex items-center justify-center px-4">
-          <img
+        <div className="relative z-10 flex items-center justify-center px-4">
+          <Image
             src="/quizeee-hero.png"
             alt="quizeee"
-            className="w-[72vw] max-w-[860px] min-w-[340px] h-auto select-none pointer-events-none drop-shadow-sm transition-all"
+            width={2172}
+            height={724}
+            sizes="(max-width: 640px) 90vw, (max-width: 1194px) 72vw, 860px"
+            preload
+            className="w-[90vw] sm:w-[72vw] max-w-[860px] h-auto select-none pointer-events-none drop-shadow-sm transition-all"
           />
-        </main>
+        </div>
       </div>
 
       {/* Instant Quiz Hub: Host Without Login & Join Live Game */}
@@ -234,38 +246,47 @@ export default function Home() {
 
       {/* Features Section - Scrolling Ticker (Located below the hero section on scroll) */}
       <section id="features" className="py-14 relative z-20 overflow-hidden bg-[#fff5f0] border-t border-[#E86F47]/30">
-        <div className="flex w-max animate-marquee hover:[animation-play-state:paused] items-center">
+        <h2 className="sr-only">How Quizeee helps you learn</h2>
+        <div className="flex justify-end px-6 mb-6 motion-reduce:hidden"><button type="button" aria-pressed={tickerPaused} onClick={() => setTickerPaused(paused => !paused)} className="rounded-full border border-brand-light bg-white px-4 py-2 text-sm font-mono text-black">{tickerPaused ? 'Resume feature animation' : 'Pause feature animation'}</button></div>
+        <div data-feature-ticker style={{ animationPlayState: tickerPaused ? 'paused' : 'running' }} className="flex w-max animate-marquee hover:[animation-play-state:paused] items-center">
           {[...Array(2)].map((_, loopIndex) => (
-            <div key={loopIndex} className="flex items-center">
+            <div key={loopIndex} aria-hidden={loopIndex === 1 ? true : undefined} data-feature-copy={loopIndex === 1 ? true : undefined} className="flex items-center">
               {[
                 {
                   title: "Create Quizzes",
                   desc: "Create static or competitive quizzes in minutes.",
                   image: "/illustration-step-1.png",
+                  width: 220,
                 },
                 {
                   title: "Track Progress",
                   desc: "Get insights and analytics instantly.",
                   image: "/illustration-step-2.png",
+                  width: 205,
                 },
                 {
                   title: "Better Learning",
                   desc: "Make learning interactive and fun.",
                   image: "/illustration-step-3.png",
+                  width: 205,
                 },
                 {
                   title: "Collaborate Easily",
                   desc: "Share with students and conduct quizzes seamlessly.",
                   image: "/illustration-step-4.png",
+                  width: 230,
                 },
               ].map((step, stepIndex) => (
                 <div key={stepIndex} className="flex items-center">
                   {/* Step Card */}
                   <div className="flex flex-col items-center justify-center text-center w-[270px] shrink-0 px-2 group select-none">
                     <div className="h-[135px] w-full flex items-center justify-center mb-3 transition-transform duration-300 group-hover:scale-105">
-                      <img
+                      <Image
                         src={step.image}
-                        alt={step.title}
+                        alt=""
+                        width={step.width}
+                        height={155}
+                        sizes="230px"
                         className="max-h-full max-w-full object-contain pointer-events-none drop-shadow-xs"
                       />
                     </div>
@@ -294,6 +315,7 @@ export default function Home() {
           ))}
         </div>
       </section>
+      </main>
 
       {/* Footer Section matching exact reference design - Sleek, Full-Width with Animated Ball & Bottom Touching Curve */}
       <Footer />

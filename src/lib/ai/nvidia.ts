@@ -63,11 +63,12 @@ Generate the ${questionCount} multiple-choice questions in strict JSON format no
             'Authorization': `Bearer ${apiKey}`,
         },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(60_000),
     });
 
     if (!response.ok) {
-        const errorBody = await response.text();
-        throw new Error(`NVIDIA API request failed (${response.status}): ${errorBody}`);
+        await response.body?.cancel();
+        throw new Error(`NVIDIA API request failed (${response.status}).`);
     }
 
     const data = await response.json();

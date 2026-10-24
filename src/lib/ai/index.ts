@@ -33,8 +33,8 @@ export async function generateQuizAI(
         try {
             const questions = await generateQuizWithNvidia(extractedText, questionCount);
             return { questions, provider: 'nvidia' };
-        } catch (nvidiaErr: any) {
-            console.warn('[AI] NVIDIA generation failed, falling back to Gemini:', nvidiaErr.message);
+        } catch {
+            console.warn('[AI] NVIDIA generation failed; attempting Gemini fallback.');
             const questions = await generateQuizWithGemini(extractedText, questionCount);
             return { questions, provider: 'gemini' };
         }
@@ -44,8 +44,8 @@ export async function generateQuizAI(
         try {
             const questions = await generateQuizWithGemini(extractedText, questionCount);
             return { questions, provider: 'gemini' };
-        } catch (geminiErr: any) {
-            console.warn('[AI] Gemini generation failed, falling back to NVIDIA:', geminiErr.message);
+        } catch {
+            console.warn('[AI] Gemini generation failed; attempting NVIDIA fallback.');
             const questions = await generateQuizWithNvidia(extractedText, questionCount);
             return { questions, provider: 'nvidia' };
         }
@@ -73,8 +73,8 @@ export async function generateQuizAIFromPdfBuffer(
             const transcribedContent = await extractVisualTextFromPdfBufferWithGemini(pdfBuffer);
             const questions = await generateQuizWithNvidia(transcribedContent, questionCount);
             return { questions, provider: 'nvidia' };
-        } catch (nvidiaErr: any) {
-            console.warn('[AI Multimodal] NVIDIA transcription pipeline failed, falling back to direct Gemini multimodal:', nvidiaErr.message);
+        } catch {
+            console.warn('[AI Multimodal] Transcription pipeline failed; attempting direct Gemini vision.');
             const questions = await generateQuizFromPdfBufferWithGemini(pdfBuffer, questionCount);
             return { questions, provider: 'gemini' };
         }

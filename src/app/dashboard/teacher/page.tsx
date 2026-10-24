@@ -3,29 +3,33 @@ import QuizCreator from '@/components/QuizCreator';
 import DashboardNavbar from '@/components/DashboardNavbar';
 import DashboardBackground from '@/components/DashboardBackground';
 import DashboardLoading from '@/components/DashboardLoading';
-import { getCachedProfile, setCachedProfile, markClientHydrated, getCachedProfileDirect } from '@/lib/authCache';
-import { useEffect, useState } from 'react';
+import { getCachedProfile, setCachedProfile, markClientHydrated } from '@/lib/authCache';
+import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
-import { BookOpen, Home, FilePlus2, BarChart3 } from 'lucide-react';
+import type { Quiz } from '@/lib/types';
 
 export default function TeacherDashboard() {
     const cached = getCachedProfile();
-    const [loading, setLoading] = useState(!cached);
+    const [loading, setLoading] = useState(true);
     const [userName, setUserName] = useState(cached?.full_name || '');
     const [userId, setUserId] = useState(cached?.id || '');
-    const [quizzes, setQuizzes] = useState<any[]>([]);
+    const [quizzes, setQuizzes] = useState<Quiz[]>([]);
+    const [loadError, setLoadError] = useState('');
     const [currentTime, setCurrentTime] = useState(() => Date.now());
     const [activeTab, setActiveTab] = useState<'active'|'completed'>('active');
     const router = useRouter();
 
-    const fetchQuizzes = async (uId: string) => {
-        const { data } = await supabase
+    const fetchQuizzes = useCallback(async (uId: string) => {
+        setLoadError('');
+        const { data, error: quizError } = await supabase
             .from('quizzes')
             .select('*')
             .eq('teacher_id', uId)
             .order('created_at', { ascending: false });
         
+        if (quizError) { setLoadError('Unable to load your quizzes. Please try again.'); return; }
         if (data) {
             const competitiveQuizIds = data.filter((quiz) => quiz.type === 'competitive').map((quiz) => quiz.id);
             const { data: completedSessions } = competitiveQuizIds.length
@@ -71,7 +75,7 @@ export default function TeacherDashboard() {
                     .single();
 
                 if (error) {
-                    console.error(`Failed to generate code for static quiz ${quiz.id}`, error);
+                    console.error('Unable to generate a static quiz access code.');
                 }
 
                 return {
@@ -81,9 +85,9 @@ export default function TeacherDashboard() {
                 };
             }));
 
-            setQuizzes(quizzesWithCodes);
+            setQuizzes(quizzesWithCodes as Quiz[]);
         }
-    };
+    }, []);
 
     useEffect(() => {
         const clock = window.setInterval(() => setCurrentTime(Date.now()), 30000);
@@ -92,11 +96,6 @@ export default function TeacherDashboard() {
 
     useEffect(() => {
         markClientHydrated();
-        const storedProfile = getCachedProfileDirect();
-        if (storedProfile) {
-            setUserName(storedProfile.full_name);
-            setUserId(storedProfile.id);
-        }
 
         async function checkAuth() {
             const { data: { session } } = await supabase.auth.getSession();
@@ -128,21 +127,13 @@ export default function TeacherDashboard() {
             setLoading(false);
         }
 
-        checkAuth();
-    }, [router]);
+        void checkAuth().catch(() => { setLoadError('Unable to load your dashboard. Please try again.'); setLoading(false); });
+    }, [router, fetchQuizzes]);
 
     const handleSignOut = async () => {
         setCachedProfile(null);
         await supabase.auth.signOut();
         router.push('/auth');
-    };
-
-    const handleSelectQuiz = (quiz: any) => {
-        if (quiz.type === 'competitive') {
-            router.push(`/quiz/live/host/${quiz.id}`);
-        } else {
-            router.push(`/dashboard/teacher/quiz/${quiz.id}`);
-        }
     };
 
     return (
@@ -162,17 +153,21 @@ export default function TeacherDashboard() {
             {loading && quizzes.length === 0 ? (
                 <DashboardLoading />
             ) : (
-                <main className="max-w-6xl w-full mx-auto p-6 space-y-8 mt-4 relative z-10">
+                <main id="main-content" className="max-w-6xl w-full mx-auto p-4 sm:p-6 space-y-8 mt-4 relative z-10">
+                <h1 className="sr-only">Teacher dashboard</h1>
+                {loadError && <p role="alert" className="rounded-xl p-4 bg-red-50 text-red-700">{loadError} <button onClick={() => { void fetchQuizzes(userId); }} className="underline font-bold">Retry</button></p>}
                 {/* Quiz Creator Component */}
                 <QuizCreator teacherId={userId} onComplete={() => fetchQuizzes(userId)} />
 
                 {/* My Quizzes Section */}
                 <div className="space-y-6">
+                    <h2 className="sr-only">My quizzes</h2>
                     {/* Tabs */}
-                    <div className="flex border-2 border-brand-light rounded-xl overflow-hidden bg-white max-w-2xl mx-auto mb-8">
+                    <div role="group" aria-label="Quiz status filters" className="flex border-2 border-brand-light rounded-xl overflow-hidden bg-white max-w-2xl mx-auto mb-8">
                         <button 
                             className={`flex-1 py-4 text-xl font-mono transition ${activeTab === 'active' ? 'bg-brand text-black font-bold' : 'bg-transparent text-gray-600 hover:bg-gray-50'}`}
                             onClick={() => setActiveTab('active')}
+                            aria-pressed={activeTab === 'active'}
                         >
                             Active
                         </button>
@@ -180,6 +175,7 @@ export default function TeacherDashboard() {
                         <button 
                             className={`flex-1 py-4 text-xl font-mono transition ${activeTab === 'completed' ? 'bg-brand text-black font-bold' : 'bg-transparent text-gray-600 hover:bg-gray-50'}`}
                             onClick={() => setActiveTab('completed')}
+                            aria-pressed={activeTab === 'completed'}
                         >
                             Completed
                         </button>
@@ -202,13 +198,13 @@ export default function TeacherDashboard() {
                             }).map((quiz) => {
                                 return (
                                     <div key={quiz.id} className="bg-white/85 backdrop-blur-md border border-brand-light/80 rounded-2xl shadow-xs hover:shadow-md hover:border-[#E86F47]/40 transition-all duration-200 overflow-hidden">
-                                        <div 
+                                        <Link
+                                            href={quiz.type === 'competitive' ? `/quiz/live/host/${quiz.id}` : `/dashboard/teacher/quiz/${quiz.id}`}
                                             className="p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center cursor-pointer hover:bg-brand-lightest/30 gap-4"
-                                            onClick={() => handleSelectQuiz(quiz)}
                                         >
-                                            <div className="flex flex-col gap-2 min-w-0 flex-1">
+                                            <div className="flex flex-col gap-2 min-w-0 w-full sm:w-auto flex-1">
                                                 <h3 className="text-3xl font-normal font-mono text-black truncate" title={quiz.title}>{quiz.title}</h3>
-                                                <div className="flex items-center space-x-4">
+                                                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                                                     <span className="text-xs font-mono text-gray-600 font-bold">
                                                         Created on : {new Date(quiz.created_at).toLocaleDateString()}
                                                     </span>
@@ -229,7 +225,7 @@ export default function TeacherDashboard() {
                                                     {quiz.type === 'static' ? 'Static' : 'Competitive'}
                                                 </span>
                                             </div>
-                                        </div>
+                                        </Link>
                                     </div>
                                 );
                             })}

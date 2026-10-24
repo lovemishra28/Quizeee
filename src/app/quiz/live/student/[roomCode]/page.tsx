@@ -1,12 +1,14 @@
 'use client';
 
-import { useEffect, useState, use, useRef } from 'react';
+import { useCallback, useEffect, useState, use, useRef } from 'react';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Loader2, MonitorPlay, Trophy, Clock, Zap, ArrowLeft, Gamepad2 } from 'lucide-react';
 import DashboardBackground from '@/components/DashboardBackground';
 import { joinInstantQuizAction } from '@/actions/instantQuiz';
+import { setCachedProfile, setRememberMeActive } from '@/lib/authCache';
+import { validateQuizQuestions } from '@/lib/quizValidation';
 
 type LiveSession = {
   id: string;
@@ -45,7 +47,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
   const [session, setSession] = useState<LiveSession | null>(null);
   const [studentId, setStudentId] = useState<string | null>(null);
   const [userName, setUserName] = useState<string>('Student');
-  const [status, setStatus] = useState<'joining' | 'prompt_nickname' | 'waiting' | 'active' | 'feedback' | 'leaderboard' | 'finished' | 'completed'>('joining');
+  const [status, setStatus] = useState<'joining' | 'prompt_nickname' | 'waiting' | 'active' | 'feedback' | 'leaderboard' | 'finished' | 'completed' | 'error'>('joining');
   const [guestNicknameInput, setGuestNicknameInput] = useState('');
   const [guestJoinError, setGuestJoinError] = useState('');
   const [guestJoining, setGuestJoining] = useState(false);
@@ -58,7 +60,13 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [answerFeedback, setAnswerFeedback] = useState<AnswerFeedback | null>(null);
   const hasAuthoritativeLeaderboard = useRef(false);
-  const restoredSubmission = useRef(false);
+  const [restoredSubmission, setRestoredSubmission] = useState(false);
+  const [answerSubmitting, setAnswerSubmitting] = useState(false);
+  const [submissionError, setSubmissionError] = useState('');
+  const submissionInFlight = useRef(false);
+  const activeQuestionId = useRef<string | null>(null);
+  const questionRequest = useRef(0);
+  const latestSessionStatus = useRef<LiveSession['status']>('waiting');
   const questionDuration = useRef(30);
   const questionEndTimeRef = useRef<number>(0);
 
@@ -69,6 +77,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
     let authenticatedStudentId: string | null = null;
 
     async function fetchQuestionByIndex(quizId: string, index: number): Promise<LiveQuestion | null> {
+      const requestId = ++questionRequest.current;
       const { data, error } = await supabase
         .from('questions')
         .select('*')
@@ -77,15 +86,26 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
         .eq('order_index', index + 1)
         .single();
       if (error) {
-        console.error('Failed to load live question', error);
+        setSubmissionError('Unable to load the live question. Refresh to try again.');
         return null;
       }
-      setCurrentQuestion(data);
-      return data;
+      if (cancelled || requestId !== questionRequest.current || !data) return null;
+      try {
+        const normalized = validateQuizQuestions([{ ...data, explanation: data.explanation ?? '', subtopic: data.subtopic ?? 'General' }])[0];
+        const question = { id: data.id, ...normalized };
+        activeQuestionId.current = question.id;
+        setCurrentQuestion(question);
+        return question;
+      } catch {
+        setSubmissionError('This question could not be loaded. Please contact the host.');
+        setStatus('error');
+        return null;
+      }
     }
 
     const applySessionUpdate = async (updatedSession: LiveSession) => {
       setSession(updatedSession);
+      latestSessionStatus.current = updatedSession.status;
       if (updatedSession.status === 'leaderboard') {
         setStatus('feedback');
         return;
@@ -97,16 +117,18 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
       if (updatedSession.status === 'waiting' || updatedSession.current_question_index < 0) {
         setStatus('waiting');
         setCurrentQuestion(null);
+        activeQuestionId.current = null;
         return;
       }
       setStatus('active');
       const questionKey = `live-quiz-${updatedSession.id}-question-${updatedSession.current_question_index}-end`;
-      const storedEndTime = window.localStorage.getItem(questionKey);
+      let storedEndTime: string | null = null;
+      try { storedEndTime = window.localStorage.getItem(questionKey); } catch {}
       const now = Date.now();
       let targetEnd = storedEndTime ? Number(storedEndTime) : 0;
       if (!targetEnd || isNaN(targetEnd)) {
         targetEnd = now + questionDuration.current * 1000;
-        window.localStorage.setItem(questionKey, String(targetEnd));
+        try { window.localStorage.setItem(questionKey, String(targetEnd)); } catch {}
       }
       questionEndTimeRef.current = targetEnd;
       setQuestionStartTime(targetEnd - questionDuration.current * 1000);
@@ -131,14 +153,15 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
         .limit(1);
 
       if (submissionError) {
-        console.error('Failed to restore live quiz progress', submissionError);
+        setSubmissionError('Unable to restore your answer. Check your connection before retrying.');
         return;
       }
+      if (cancelled || activeQuestionId.current !== question.id) return;
 
       const submission = existingSubmission?.[0];
       if (submission) {
         setHasSubmitted(true);
-        restoredSubmission.current = true;
+        setRestoredSubmission(true);
         setAnswerFeedback({
           selectedIndex: submission.selected_option_index,
           correctIndex: question.correct_option_index,
@@ -147,7 +170,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
         setStatus('feedback');
       } else {
         setHasSubmitted(false);
-        restoredSubmission.current = false;
+        setRestoredSubmission(false);
       }
     };
 
@@ -161,13 +184,16 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
       authenticatedStudentId = user.id;
       setStudentId(user.id);
       
-      const { data: profile } = await supabase
+      const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('full_name')
+        .select('full_name, role')
         .eq('id', user.id)
         .single();
         
-      if (profile) setUserName(profile.full_name);
+      if (cancelled) return;
+      if (profileError || !profile) { setGuestJoinError('Unable to verify your account. Please try again.'); setStatus('error'); return; }
+      if (profile.role !== 'student') { router.replace('/dashboard/teacher'); return; }
+      setUserName(profile.full_name);
 
       // 2. Verify the room code exists and is active
       const { data: sessionData, error } = await supabase
@@ -177,8 +203,8 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
         .single();
 
       if (error || !sessionData) {
-        alert('Invalid or expired room code.');
-        router.push(isInstant ? '/' : '/dashboard/student');
+        setGuestJoinError('Invalid or expired room code.');
+        setStatus('error');
         return;
       }
 
@@ -212,16 +238,18 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
           const { index, duration, endTime } = payload.payload;
           questionDuration.current = duration;
           const now = Date.now();
-          const targetEnd = (typeof endTime === 'number' && endTime > now) ? endTime : now + duration * 1000;
+          if (!Number.isInteger(index) || !Number.isFinite(duration) || duration < 1 || duration > 300) return;
+          const targetEnd = (typeof endTime === 'number' && Number.isFinite(endTime) && endTime > 0) ? endTime : now + duration * 1000;
           questionEndTimeRef.current = targetEnd;
           const questionKey = `live-quiz-${sessionData.id}-question-${index}-end`;
-          window.localStorage.setItem(questionKey, String(targetEnd));
+          try { window.localStorage.setItem(questionKey, String(targetEnd)); } catch {}
+          latestSessionStatus.current = 'active';
           setStatus('active');
           setHasSubmitted(false);
-          restoredSubmission.current = false;
+          setRestoredSubmission(false);
           setAnswerFeedback(null);
           setTimeLeft(Math.max(0, Math.ceil((targetEnd - now) / 1000)));
-          setQuestionStartTime(now);
+          setQuestionStartTime(targetEnd - duration * 1000);
           lastQuestionIndex = index;
           lastStatus = 'active';
           void fetchQuestionByIndex(sessionData.quiz_id, index);
@@ -230,8 +258,10 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
           hasAuthoritativeLeaderboard.current = true;
           setLeaderboard(payload.payload.entries || []);
           if (payload.payload.isFinal) {
+            latestSessionStatus.current = 'finished';
             setStatus('finished');
           } else {
+            latestSessionStatus.current = 'leaderboard';
             setStatus('feedback');
           }
         });
@@ -274,14 +304,14 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
 
     }
 
-    joinRoom();
+    void joinRoom().catch(() => { if (!cancelled) { setGuestJoinError('Unable to connect to this live room. Please try again.'); setStatus('error'); } });
 
     return () => {
       cancelled = true;
       if (poller) window.clearInterval(poller);
       if (channel) supabase.removeChannel(channel);
     };
-  }, [roomCode, router, triggerJoinCount]);
+  }, [roomCode, router, triggerJoinCount, isInstant]);
 
   // Synchronized countdown based on target end timestamp
   useEffect(() => {
@@ -291,6 +321,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
       if (!targetEnd) return;
       const remaining = Math.max(0, Math.ceil((targetEnd - Date.now()) / 1000));
       setTimeLeft(remaining);
+      if (remaining === 0 && status === 'active') setStatus('feedback');
     };
     checkTime();
     const timer = window.setInterval(checkTime, 250);
@@ -309,7 +340,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
         .eq('session_id', sessionId);
 
       if (error) {
-        console.error('Failed to load leaderboard', error);
+        console.error('Unable to load the live leaderboard.');
         return;
       }
 
@@ -335,19 +366,13 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
     void loadLeaderboard();
   }, [status, session]);
 
-  const handleAnswerSubmit = async (selectedIndex: number) => {
-    if (hasSubmitted || !currentQuestion || !session) return;
-    
-    setHasSubmitted(true);
-    restoredSubmission.current = false;
+  const handleAnswerSubmit = useCallback(async (selectedIndex: number) => {
+    if (hasSubmitted || submissionInFlight.current || !currentQuestion || !session || timeLeft === 0 || status !== 'active') return;
+    submissionInFlight.current = true;
+    setAnswerSubmitting(true);
+    setSubmissionError('');
     const responseTimeMs = Math.max(0, Date.now() - questionStartTime);
     const isCorrect = selectedIndex === currentQuestion.correct_option_index;
-    setAnswerFeedback({
-      selectedIndex,
-      correctIndex: currentQuestion.correct_option_index,
-      isCorrect,
-    });
-    setStatus('feedback');
     
     // Correct: 1000 base points + up to 500 speed points.
     // Incorrect: zero points and zero speed bonus, with no deduction.
@@ -357,18 +382,30 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
       : 0;
     const score = isCorrect ? 1000 + speedBonus : 0;
 
-    await supabase
+    try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user || user.id !== studentId) throw new Error('Please sign in again before submitting an answer.');
+    const { error } = await supabase
       .from('submissions')
       .insert({
         session_id: session.id,
-        student_id: (await supabase.auth.getUser()).data.user?.id,
+        student_id: user.id,
         question_id: currentQuestion.id,
         selected_option_index: selectedIndex,
         is_correct: isCorrect,
         score_awarded: score,
         response_time_ms: responseTimeMs,
       });
-  };
+    if (error) throw new Error('Your answer could not be saved. Please try again before the timer ends.');
+    if (activeQuestionId.current === currentQuestion.id) {
+      setHasSubmitted(true); setRestoredSubmission(false);
+      setAnswerFeedback({ selectedIndex, correctIndex: currentQuestion.correct_option_index, isCorrect });
+      if (latestSessionStatus.current !== 'finished' && latestSessionStatus.current !== 'completed') setStatus('feedback');
+    }
+    } catch (error) {
+      if (activeQuestionId.current === currentQuestion.id) setSubmissionError(error instanceof Error ? error.message : 'Unable to submit your answer. Please try again.');
+    } finally { submissionInFlight.current = false; setAnswerSubmitting(false); }
+  }, [hasSubmitted, currentQuestion, session, timeLeft, status, questionStartTime, studentId]);
 
   const handleGuestJoinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -386,29 +423,34 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
       if (!res.success || !res.guestEmail || !res.guestPassword) {
         throw new Error(res.error || 'Failed to join room.');
       }
-      await supabase.auth.signInWithPassword({
+      setRememberMeActive(false);
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email: res.guestEmail,
         password: res.guestPassword,
       });
+      if (authError || !authData.user) throw new Error('Guest sign-in failed. Please try joining again.');
+      setCachedProfile({ id: authData.user.id, full_name: guestNicknameInput.trim(), role: 'student' });
       setStatus('joining');
       setTriggerJoinCount((c) => c + 1);
-    } catch (err: any) {
-      setGuestJoinError(err.message || 'Failed to join');
+    } catch (err) {
+      setGuestJoinError(err instanceof Error ? err.message : 'Failed to join');
       setGuestJoining(false);
     }
   };
 
+  if (status === 'error') return <main id="main-content" className="min-h-screen flex flex-col items-center justify-center bg-bg p-6 font-mono text-center"><h1 className="text-3xl font-black text-black mb-4">Live room unavailable</h1><p role="alert" className="text-muted mb-6">{submissionError || guestJoinError}</p><button onClick={() => window.location.reload()} className="bg-brand text-black rounded-xl px-6 py-3">Try again</button></main>;
+
   if (status === 'prompt_nickname') {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#fff5f0] p-6 text-black relative overflow-hidden font-mono">
+      <div role="main" id="main-content" className="min-h-screen flex items-center justify-center bg-[#fff5f0] p-6 text-black relative overflow-hidden font-mono">
         <DashboardBackground />
         <div className="relative z-10 backdrop-blur-md bg-white/95 border-2 border-brand-light rounded-[2.5rem] p-8 sm:p-12 text-center max-w-md w-full shadow-lg">
           <div className="w-14 h-14 rounded-2xl bg-brand/20 flex items-center justify-center text-brand mx-auto mb-4 shadow-2xs">
             <Gamepad2 className="w-7 h-7 text-[#E86F47]" />
           </div>
-          <h2 className="text-2xl sm:text-3xl font-black font-mono tracking-tight text-black mb-1">
+          <h1 className="text-2xl sm:text-3xl font-black font-mono tracking-tight text-black mb-1">
             Join Live Room
-          </h2>
+          </h1>
           <p className="text-xs font-mono text-[#8c827a] mb-6">
             Room Code: <strong className="text-brand font-black text-sm tracking-widest">#{roomCode}</strong>
           </p>
@@ -421,11 +463,12 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
 
           <form onSubmit={handleGuestJoinSubmit} className="space-y-4">
             <div className="text-left">
-              <label className="block text-xs font-bold uppercase tracking-wider text-[#8c827a] mb-1.5">
+              <label htmlFor="guest-nickname" className="block text-xs font-bold uppercase tracking-wider text-[#8c827a] mb-1.5">
                 Your Nickname
               </label>
               <input
                 type="text"
+                id="guest-nickname"
                 maxLength={24}
                 required
                 value={guestNicknameInput}
@@ -468,7 +511,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
 
   if (status === 'joining') {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#fff5f0] relative overflow-hidden">
+      <div role="main" id="main-content" className="min-h-screen flex items-center justify-center bg-[#fff5f0] relative overflow-hidden">
         <DashboardBackground />
         <div className="relative z-10 flex flex-col items-center">
           <div className="w-12 h-12 rounded-full border-4 border-[#edd6cb] border-t-[#E86F47] animate-spin" />
@@ -480,7 +523,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
 
   if (status === 'waiting') {
     return (
-      <div className="min-h-screen bg-[#fff5f0] flex flex-col items-center justify-center p-6 text-black relative overflow-hidden">
+      <div role="main" id="main-content" className="min-h-screen bg-[#fff5f0] flex flex-col items-center justify-center p-6 text-black relative overflow-hidden">
         <DashboardBackground />
         <div className="relative z-10 backdrop-blur-md bg-white/85 border-2 border-brand-light rounded-[2.5rem] p-10 sm:p-12 text-center max-w-xl w-full shadow-lg flex flex-col items-center">
           <button
@@ -501,9 +544,9 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
           <div className="inline-flex bg-brand-light p-6 rounded-full mb-6 border-2 border-brand-light shadow-sm">
             <MonitorPlay className="w-12 h-12 text-brand" />
           </div>
-          <h2 className="text-3xl sm:text-4xl font-black font-mono tracking-tight mb-2 text-black">
+          <h1 className="text-3xl sm:text-4xl font-black font-mono tracking-tight mb-2 text-black">
             You&apos;re in, {userName}!
-          </h2>
+          </h1>
           <p className="text-[#8c827a] font-mono text-base sm:text-lg font-bold">
             Waiting for the host to start the game...
           </p>
@@ -513,9 +556,9 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
   }
 
   if (status === 'feedback') {
-    if (restoredSubmission.current && timeLeft > 0) {
+    if (restoredSubmission && timeLeft > 0) {
       return (
-        <div className="min-h-screen flex flex-col items-center justify-center bg-[#fff5f0] p-6 text-center relative overflow-hidden">
+        <div role="main" id="main-content" className="min-h-screen flex flex-col items-center justify-center bg-[#fff5f0] p-6 text-center relative overflow-hidden">
           <DashboardBackground />
           <div className="relative z-10 backdrop-blur-md bg-white/85 border-2 border-brand-light rounded-[2.5rem] p-12 max-w-xl w-full shadow-lg text-center">
             <div className="w-12 h-12 rounded-full border-4 border-[#edd6cb] border-t-[#E86F47] animate-spin mx-auto mb-6" />
@@ -530,9 +573,11 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
       );
     }
 
+    if (timeLeft === 0 && !answerFeedback) return <main id="main-content" className="min-h-screen flex flex-col items-center justify-center bg-bg p-6 font-mono text-center"><h1 className="text-3xl font-black text-black mb-4">Time is up</h1>{submissionError && <p role="alert" className="text-red-700 mb-4">{submissionError}</p>}<p role="status" className="text-muted">{answerSubmitting ? 'Saving your answer...' : 'Waiting for the teacher to start the next question...'}</p></main>;
+
     if (timeLeft > 0 || !currentQuestion || !answerFeedback) {
       return (
-        <div className="min-h-screen flex flex-col items-center justify-center bg-[#fff5f0] p-6 text-center relative overflow-hidden">
+        <div role="main" id="main-content" className="min-h-screen flex flex-col items-center justify-center bg-[#fff5f0] p-6 text-center relative overflow-hidden">
           <DashboardBackground />
           <div className="relative z-10 backdrop-blur-md bg-white/85 border-2 border-brand-light rounded-[2.5rem] p-12 max-w-xl w-full shadow-lg text-center">
             <div className="w-12 h-12 rounded-full border-4 border-[#edd6cb] border-t-[#E86F47] animate-spin mx-auto mb-6" />
@@ -554,7 +599,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
     return (
       <div className="min-h-screen bg-[#fff5f0] p-6 relative overflow-x-hidden">
         <DashboardBackground />
-        <main className="relative z-10 max-w-4xl mx-auto pt-10">
+        <main id="main-content" className="relative z-10 max-w-4xl mx-auto pt-10">
           <div className="backdrop-blur-md bg-white/85 border-2 border-brand-light rounded-[2.5rem] p-8 sm:p-12 shadow-lg mb-8 text-center">
             <p className={`text-3xl sm:text-4xl font-black font-mono tracking-tight mb-8 ${answerFeedback.isCorrect ? 'text-green-600' : 'text-red-600'}`}>
               {answerFeedback.isCorrect ? '✓ Your answer was correct!' : '✗ Your answer was wrong.'}
@@ -601,7 +646,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
     return (
       <div className="min-h-screen bg-[#fff5f0] p-6 text-black relative overflow-x-hidden">
         <DashboardBackground />
-        <main className="relative z-10 max-w-4xl mx-auto pt-10">
+        <main id="main-content" className="relative z-10 max-w-4xl mx-auto pt-10">
           {status === 'finished' && winner ? (
             <div className="text-center mb-10 animate-bounce backdrop-blur-md bg-white/85 p-10 sm:p-12 rounded-[2.5rem] border-2 border-brand-light shadow-lg">
               <Trophy className="w-20 h-20 text-brand mx-auto mb-4" />
@@ -667,10 +712,10 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
 
   if (status === 'completed') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-[#fff5f0] p-6 text-black relative overflow-hidden font-mono">
+      <div role="main" id="main-content" className="min-h-screen flex flex-col items-center justify-center bg-[#fff5f0] p-6 text-black relative overflow-hidden font-mono">
         <DashboardBackground />
         <div className="relative z-10 backdrop-blur-md bg-white/85 border-2 border-brand-light rounded-[2.5rem] p-12 text-center shadow-lg max-w-md w-full">
-          <p className="text-3xl font-black font-mono tracking-tight mb-8 text-black">This live quiz has ended.</p>
+          <h1 className="text-3xl font-black font-mono tracking-tight mb-8 text-black">This live quiz has ended.</h1>
           <button
             onClick={() => router.push(isInstant ? '/' : '/dashboard/student')}
             className="w-full rounded-xl bg-brand hover:bg-[#c47155] px-8 py-5 font-black font-mono text-xl text-black transition shadow-sm cursor-pointer"
@@ -684,7 +729,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
 
   if (!currentQuestion) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#fff5f0] relative overflow-hidden">
+      <div role="main" id="main-content" className="min-h-screen flex items-center justify-center bg-[#fff5f0] relative overflow-hidden">
         <DashboardBackground />
         <div className="relative z-10 flex flex-col items-center">
           <div className="w-12 h-12 rounded-full border-4 border-[#edd6cb] border-t-[#E86F47] animate-spin" />
@@ -696,7 +741,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
 
   if (hasSubmitted) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-[#fff5f0] p-6 text-center relative overflow-hidden">
+      <div role="main" id="main-content" className="min-h-screen flex flex-col items-center justify-center bg-[#fff5f0] p-6 text-center relative overflow-hidden">
         <DashboardBackground />
         <div className="relative z-10 backdrop-blur-md bg-white/85 border-2 border-brand-light rounded-[2.5rem] p-12 max-w-xl w-full shadow-lg text-center">
           <div className="w-12 h-12 rounded-full border-4 border-[#edd6cb] border-t-[#E86F47] animate-spin mx-auto mb-6" />
@@ -709,8 +754,10 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
   return (
     <div className="min-h-screen bg-[#fff5f0] p-6 flex flex-col items-center relative overflow-x-hidden">
       <DashboardBackground />
-      <main className="relative z-10 max-w-4xl w-full pt-10">
-        <div className="flex justify-between items-center mb-8 backdrop-blur-md bg-white/85 border-2 border-brand-light p-6 rounded-2xl shadow-md">
+      <main id="main-content" className="relative z-10 max-w-4xl w-full pt-4 sm:pt-10">
+        {submissionError && <p role="alert" className="mb-6 p-4 bg-red-50 text-red-700 rounded-xl">{submissionError}</p>}
+        {answerSubmitting && <p role="status" className="mb-4 text-muted font-mono">Submitting your answer...</p>}
+        <div className="flex flex-wrap justify-between items-center gap-2 mb-6 backdrop-blur-md bg-white/85 border-2 border-brand-light p-4 sm:p-6 rounded-2xl shadow-md">
           <p className="text-lg font-black font-mono uppercase tracking-widest text-brand">Live quiz</p>
           <div className="flex items-center gap-3">
             <span className="text-lg font-bold font-mono text-[#8c827a]">Time left:</span>
@@ -731,6 +778,7 @@ export default function StudentLiveRoom({ params }: { params: Promise<{ roomCode
               <button
                 key={`${currentQuestion.id}-${index}`}
                 onClick={() => handleAnswerSubmit(index)}
+                disabled={answerSubmitting || timeLeft === 0}
                 className="w-full rounded-2xl bg-white/95 border-2 border-brand-light p-6 text-left text-xl sm:text-2xl font-bold font-mono text-black shadow-sm transition hover:border-brand hover:bg-brand-lightest hover:scale-[1.01] flex items-center"
               >
                 <span className="mr-4 inline-flex items-center justify-center w-11 h-11 shrink-0 rounded-full bg-brand-light text-brand font-black border-2 border-brand-light">

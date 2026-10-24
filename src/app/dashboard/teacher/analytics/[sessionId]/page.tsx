@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
-import { AlertCircle, ArrowLeft, BarChart3, Loader2 } from 'lucide-react';
+import { AlertCircle, ArrowLeft, BarChart3 } from 'lucide-react';
 import {
   Bar,
   BarChart as RechartsBarChart,
@@ -106,7 +106,7 @@ export default function AnalyticsDashboard({
         .eq('session_id', sessionId);
 
       if (submissionError) {
-        console.error('Error fetching submissions:', submissionError);
+        console.error('Unable to fetch analytics submissions.');
         if (!cancelled) {
           setErrorMessage('Unable to load analytics for this session.');
           setLoading(false);
@@ -147,7 +147,7 @@ export default function AnalyticsDashboard({
       }
     }
 
-    void fetchAnalytics();
+    void fetchAnalytics().catch(() => { if (!cancelled) { setErrorMessage('Unable to load analytics. Please try again.'); setLoading(false); } });
     return () => {
       cancelled = true;
     };
@@ -183,7 +183,7 @@ export default function AnalyticsDashboard({
   return (
     <div className="min-h-screen bg-[#fff5f0] text-foreground font-mono relative p-6 pb-16 selection:bg-[#E86F47] selection:text-white">
       <DashboardBackground />
-      <div className="max-w-6xl mx-auto relative z-10">
+      <main id="main-content" className="max-w-6xl mx-auto relative z-10">
         <button
           onClick={() => router.push('/dashboard/teacher/analytics')}
           className="mb-8 inline-flex items-center gap-2 text-sm font-bold font-mono text-[#E86F47] hover:text-black transition px-4 py-2 rounded-full bg-white/85 backdrop-blur-md border border-[#E86F47]/20 shadow-xs cursor-pointer"
@@ -210,14 +210,14 @@ export default function AnalyticsDashboard({
           </div>
           <div className="bg-[#fbe6df]/90 backdrop-blur-md p-8 rounded-[2rem] border border-[#f5c4b5] shadow-md shadow-[#E86F47]/5 flex flex-col items-center justify-center text-center">
             <p className="text-lg font-bold font-mono text-gray-500 mb-2">Quiz Type</p>
-            <h2 className="text-5xl font-black font-mono capitalize text-black">
+            <h2 className="text-3xl sm:text-4xl font-black font-mono capitalize text-black break-words">
               {quizMetadata?.type || 'Unknown'}
             </h2>
           </div>
         </div>
 
-        <div className="bg-[#fbe6df]/90 backdrop-blur-md p-8 rounded-[2rem] border border-[#f5c4b5] shadow-md shadow-[#E86F47]/5 h-[500px]">
-          <h2 className="text-3xl font-bold font-mono text-black mb-8 text-center sm:text-left">
+        <div className="bg-[#fbe6df]/90 backdrop-blur-md p-4 sm:p-8 rounded-[2rem] border border-[#f5c4b5] shadow-md shadow-[#E86F47]/5 h-[500px] flex flex-col">
+          <h2 className="text-2xl sm:text-3xl font-bold font-mono text-black mb-6 shrink-0 text-center sm:text-left">
             Classroom Comprehension by Subtopic
           </h2>
           {chartData.length === 0 ? (
@@ -225,6 +225,7 @@ export default function AnalyticsDashboard({
               No submissions are available for this session yet.
             </div>
           ) : (
+            <div className="min-h-0 flex-1">
             <ResponsiveContainer width="100%" height="100%">
               <RechartsBarChart
                 data={chartData}
@@ -235,13 +236,13 @@ export default function AnalyticsDashboard({
                   dataKey="name"
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fill: '#6b7280', fontSize: 14, fontFamily: 'monospace', fontWeight: 'bold' }}
+                  tick={{ fill: 'var(--color-muted)', fontSize: 14, fontFamily: 'var(--font-courier)', fontWeight: 'bold' }}
                 />
                 <YAxis
                   domain={[0, 100]}
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fill: '#6b7280', fontSize: 14, fontFamily: 'monospace', fontWeight: 'bold' }}
+                  tick={{ fill: 'var(--color-muted)', fontSize: 14, fontFamily: 'var(--font-courier)', fontWeight: 'bold' }}
                   tickFormatter={(value: number) => `${value}%`}
                 />
                 <Tooltip
@@ -260,9 +261,11 @@ export default function AnalyticsDashboard({
                 <Bar dataKey="accuracy" fill="#E86F47" radius={[12, 12, 0, 0]} maxBarSize={80} />
               </RechartsBarChart>
             </ResponsiveContainer>
+            </div>
           )}
         </div>
-      </div>
+        {chartData.length > 0 && <ul aria-label="Subtopic accuracy percentages" className="mt-6 flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted">{chartData.map(topic => <li key={topic.name}>{topic.name}: <strong className="text-black">{topic.accuracy}%</strong></li>)}</ul>}
+      </main>
     </div>
   );
 }

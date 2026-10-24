@@ -2,10 +2,11 @@
 
 export default function DashboardBackground() {
     return (
-        <div className="fixed inset-0 w-full h-full pointer-events-none overflow-hidden z-0 bg-[#fff5f0]">
+        <div aria-hidden="true" className="fixed inset-0 w-full h-full pointer-events-none overflow-hidden z-0 bg-[#fff5f0]">
             {/* Ambient Blurred Live Wallpaper Layer for Depth & Visual Segregation */}
             <div className="absolute inset-0 w-full h-full filter blur-[2px] opacity-45 pointer-events-none select-none">
                 <svg
+                    data-decorative-motion
                     viewBox="0 0 1440 900"
                     preserveAspectRatio="xMidYMid slice"
                     className="w-full h-full absolute inset-0"

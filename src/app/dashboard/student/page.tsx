@@ -3,11 +3,11 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
-import { Play, Hash, Clock, CheckCircle, Award } from 'lucide-react';
+import { Play, Hash, Clock, CheckCircle } from 'lucide-react';
 import DashboardNavbar from '@/components/DashboardNavbar';
 import DashboardBackground from '@/components/DashboardBackground';
 import DashboardLoading from '@/components/DashboardLoading';
-import { getCachedProfile, setCachedProfile, markClientHydrated, getCachedProfileDirect } from '@/lib/authCache';
+import { getCachedProfile, setCachedProfile, markClientHydrated } from '@/lib/authCache';
 
 interface StudentQuizHistoryItem {
     sessionId: string;
@@ -25,20 +25,17 @@ interface StudentQuizHistoryItem {
 
 export default function StudentDashboard() {
     const cached = getCachedProfile();
-    const [loading, setLoading] = useState(!cached);
+    const [loading, setLoading] = useState(true);
     const [userName, setUserName] = useState(cached?.full_name || '');
-    const [userId, setUserId] = useState(cached?.id || '');
     const [roomCode, setRoomCode] = useState('');
     const [quizHistory, setQuizHistory] = useState<StudentQuizHistoryItem[]>([]);
+    const [loadError, setLoadError] = useState('');
+    const [joinError, setJoinError] = useState('');
+    const [joining, setJoining] = useState(false);
     const router = useRouter();
 
     useEffect(() => {
         markClientHydrated();
-        const storedProfile = getCachedProfileDirect();
-        if (storedProfile) {
-            setUserName(storedProfile.full_name);
-            setUserId(storedProfile.id);
-        }
 
         async function checkAuth() {
             const { data: { session } } = await supabase.auth.getSession();
@@ -55,12 +52,13 @@ export default function StudentDashboard() {
                 .single();
 
             if (!profile) {
-                router.push('/auth');
+                setLoadError('Unable to verify your profile. Please try again.');
+                setLoading(false);
                 return;
             }
+            if (profile.role === 'teacher') { router.replace('/dashboard/teacher'); return; }
 
             setUserName(profile.full_name);
-            setUserId(session.user.id);
             setCachedProfile({
                 id: session.user.id,
                 full_name: profile.full_name,
@@ -94,13 +92,13 @@ export default function StudentDashboard() {
                 .order('submitted_at', { ascending: false });
 
             if (historyError) {
-                console.error('Error fetching student quiz history:', historyError);
+                setLoadError('Unable to load your quiz history. Please try again.');
                 setQuizHistory([]);
             } else if (studentSubmissions) {
                 const historyMap = new Map<string, StudentQuizHistoryItem>();
 
-                studentSubmissions.forEach((sub: any) => {
-                    const sess = sub.quiz_sessions;
+                studentSubmissions.forEach(sub => {
+                    const sess = Array.isArray(sub.quiz_sessions) ? sub.quiz_sessions[0] : sub.quiz_sessions;
                     const quiz = Array.isArray(sess?.quizzes) ? sess.quizzes[0] : sess?.quizzes;
                     if (!sess || !quiz) return;
 
@@ -145,15 +143,19 @@ export default function StudentDashboard() {
             setLoading(false);
         }
 
-        checkAuth();
+        void checkAuth().catch(() => { setLoadError('Unable to load your dashboard. Please try again.'); setLoading(false); });
     }, [router]);
 
     const handleJoinSession = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (roomCode.length !== 6) {
-            alert('Please enter a valid 6-digit room code');
+        setJoinError('');
+        if (!/^\d{6}$/.test(roomCode)) {
+            setJoinError('Please enter a valid 6-digit room code.');
             return;
         }
+        if (joining) return;
+        setJoining(true);
+        try {
         const { data: sessionData, error } = await supabase
             .from('quiz_sessions')
             .select('id, quiz_id, status, quizzes(type, available_from, available_until)')
@@ -161,7 +163,7 @@ export default function StudentDashboard() {
             .single();
 
         if (error || !sessionData) {
-            alert('Invalid or expired quiz code.');
+            setJoinError('Invalid or expired quiz code.');
             return;
         }
 
@@ -169,11 +171,11 @@ export default function StudentDashboard() {
         if (quiz?.type === 'static') {
             const now = Date.now();
             if (quiz.available_from && now < new Date(quiz.available_from).getTime()) {
-                alert(`This quiz opens at ${new Date(quiz.available_from).toLocaleString()}.`);
+                setJoinError(`This quiz opens at ${new Date(quiz.available_from).toLocaleString()}.`);
                 return;
             }
             if (quiz.available_until && now >= new Date(quiz.available_until).getTime()) {
-                alert('This quiz is closed and can no longer be attempted.');
+                setJoinError('This quiz is closed and can no longer be attempted.');
                 return;
             }
             router.push(`/quiz/static/${sessionData.quiz_id}?session=${sessionData.id}`);
@@ -181,6 +183,9 @@ export default function StudentDashboard() {
         }
 
         router.push(`/quiz/live/student/${roomCode}`);
+        } catch {
+            setJoinError('Unable to join the quiz. Check your connection and try again.');
+        } finally { setJoining(false); }
     };
 
     const handleSignOut = async () => {
@@ -205,12 +210,13 @@ export default function StudentDashboard() {
             {loading ? (
                 <DashboardLoading />
             ) : (
-                <main className="max-w-6xl w-full mx-auto p-6 mt-4 relative z-10">
+                <main id="main-content" className="max-w-6xl w-full mx-auto p-4 sm:p-6 mt-4 relative z-10">
+                    {loadError && <p role="alert" className="rounded-xl p-4 mb-6 bg-red-50 text-red-700">{loadError} <button className="underline font-bold" onClick={() => window.location.reload()}>Retry</button></p>}
                     <div className="bg-brand-lightest p-8 rounded-[2rem] border border-brand-light shadow-sm text-center max-w-2xl mx-auto mb-12">
                         <div className="inline-flex p-4 bg-brand-light text-brand rounded-full mb-4">
                             <Hash className="w-8 h-8" />
                         </div>
-                        <h2 className="text-4xl font-bold font-mono tracking-tighter text-black mb-2">Join Your Quiz</h2>
+                        <h1 className="text-4xl font-bold font-mono tracking-tighter text-black mb-2">Join Your Quiz</h1>
                         <p className="text-gray-600 font-mono mb-6">
                             Enter the 6-digit room code provided by your teacher.
                         </p>
@@ -218,31 +224,35 @@ export default function StudentDashboard() {
                         <form onSubmit={handleJoinSession} className="space-y-4">
                             <input
                                 type="text"
+                                aria-label="6-digit room code"
+                                inputMode="numeric"
                                 maxLength={6}
                                 value={roomCode}
-                                onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
+                                onChange={(e) => setRoomCode(e.target.value.replace(/\D/g, ''))}
                                 placeholder="e.g. 849201"
                                 className="w-full px-6 py-4 text-center text-3xl font-mono tracking-widest border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none uppercase bg-white text-[#1c1917] font-bold placeholder:text-[#8c827a] placeholder:font-normal"
                             />
                             <button
                                 type="submit"
+                                disabled={joining}
                                 className="w-full py-4 bg-brand hover:bg-[#c47155] text-black font-mono font-bold text-xl rounded-xl flex items-center justify-center transition shadow-sm cursor-pointer"
                             >
                                 <Play className="w-6 h-6 mr-2" />
-                                Enter Quiz Room
+                                {joining ? 'Connecting...' : 'Enter Quiz Room'}
                             </button>
                         </form>
+                        {joinError && <p role="alert" className="mt-4 text-sm font-mono text-red-700">{joinError}</p>}
                     </div>
 
                     {/* Student Personal Quiz History */}
                     <div className="mt-12 space-y-6">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                             <div>
-                                <h3 className="text-3xl font-bold font-mono tracking-tighter text-black">Quiz History</h3>
+                                <h2 className="text-3xl font-bold font-mono tracking-tighter text-black">Quiz History</h2>
                                 <p className="text-gray-600 font-mono text-sm mt-0.5">Your personal record of completed quizzes and results.</p>
                             </div>
                             {quizHistory.length > 0 && (
-                                <span className="px-3.5 py-1 rounded-full bg-brand-light text-brand font-mono font-bold text-xs border border-brand-light/70 self-start sm:self-auto">
+                                <span className="px-3.5 py-1 rounded-full bg-brand-light text-black font-mono font-bold text-xs border border-brand-light/70 self-start sm:self-auto">
                                     {quizHistory.length} {quizHistory.length === 1 ? 'Quiz' : 'Quizzes'} Completed
                                 </span>
                             )}
@@ -253,7 +263,7 @@ export default function StudentDashboard() {
                                 <div className="w-14 h-14 mx-auto mb-4 rounded-full bg-[#faebe3] flex items-center justify-center text-[#E86F47]">
                                     <Clock className="w-7 h-7" />
                                 </div>
-                                <h4 className="text-2xl font-bold font-mono text-black mb-2">No Quiz History Yet</h4>
+                                <h3 className="text-2xl font-bold font-mono text-black mb-2">No Quiz History Yet</h3>
                                 <p className="text-gray-600 font-mono text-sm leading-relaxed max-w-md mx-auto">
                                     You haven&apos;t taken any quizzes yet. Enter a 6-digit room code above from your teacher to join your first quiz!
                                 </p>
@@ -275,7 +285,7 @@ export default function StudentDashboard() {
                                             className="bg-white/90 backdrop-blur-md border border-brand-light/80 rounded-2xl shadow-xs hover:shadow-md hover:border-[#E86F47]/40 transition-all duration-200 overflow-hidden"
                                         >
                                             <div className="p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                                                <div className="flex flex-col gap-2 min-w-0 flex-1">
+                                                <div className="flex flex-col gap-2 min-w-0 w-full sm:w-auto flex-1">
                                                     <div className="flex items-center gap-2.5 flex-wrap">
                                                         <span className={`text-[11px] font-mono font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-md ${
                                                             item.type === 'static'
@@ -291,9 +301,9 @@ export default function StudentDashboard() {
                                                         )}
                                                     </div>
 
-                                                    <h4 className="text-2xl font-bold font-mono text-black truncate" title={item.title}>
+                                                    <h3 className="text-2xl font-bold font-mono text-black truncate" title={item.title}>
                                                         {item.title}
-                                                    </h4>
+                                                    </h3>
 
                                                     <div className="flex items-center gap-4 text-xs font-mono text-gray-600 flex-wrap">
                                                         <span>Date: <span className="font-bold text-black">{formattedDate}</span></span>

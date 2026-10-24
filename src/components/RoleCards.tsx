@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 
 export default function RoleCards() {
   return (
@@ -102,7 +103,7 @@ export default function RoleCards() {
           </div>
 
           {/* ================= LEFT CARD: FOR STUDENTS ================= */}
-          <div className="relative p-8 sm:p-10 lg:p-12 flex flex-col md:flex-row items-center justify-between gap-8 lg:border-r border-[#efc0ad] group">
+          <div className="relative p-8 sm:p-10 lg:p-12 flex flex-col md:flex-row lg:flex-col xl:flex-row items-center justify-between gap-8 lg:border-r border-[#efc0ad] group">
             {/* Left Content Column */}
             <div className="flex flex-col items-start gap-6 max-w-[280px] sm:max-w-[300px]">
               {/* Badge: For Students */}
@@ -115,10 +116,10 @@ export default function RoleCards() {
               </div>
 
               {/* Title */}
-              <h3 className="text-3xl sm:text-4xl lg:text-[42px] font-extrabold font-mono text-[#1f1a17] tracking-tight leading-[1.12]">
+              <h2 className="text-3xl sm:text-4xl lg:text-[42px] font-extrabold font-mono text-[#1f1a17] tracking-tight leading-[1.12]">
                 Practice<br />
                 and Learn<span className="text-[#E86F47]">.</span>
-              </h3>
+              </h2>
 
               {/* CTA Button */}
               <Link
@@ -139,16 +140,19 @@ export default function RoleCards() {
 
             {/* Right Graphic: Quiz 3D Illustration */}
             <div className="relative shrink-0 flex items-center justify-center">
-              <img
+              <Image
                 src="/student-card-graphic.png"
-                alt="Practice and Learn"
+                alt=""
+                width={210}
+                height={224}
+                sizes="(max-width: 640px) 208px, 288px"
                 className="w-52 sm:w-60 md:w-64 lg:w-72 h-auto object-contain select-none pointer-events-none transition-transform duration-500 group-hover:scale-105"
               />
             </div>
           </div>
 
           {/* ================= RIGHT CARD: FOR TEACHERS ================= */}
-          <div className="relative p-8 sm:p-10 lg:p-12 flex flex-col md:flex-row items-center justify-between gap-8 border-t lg:border-t-0 border-[#efc0ad] group">
+          <div className="relative p-8 sm:p-10 lg:p-12 flex flex-col md:flex-row lg:flex-col xl:flex-row items-center justify-between gap-8 border-t lg:border-t-0 border-[#efc0ad] group">
             {/* Left Content Column */}
             <div className="flex flex-col items-start gap-6 max-w-[280px] sm:max-w-[300px]">
               {/* Badge: For Teachers */}
@@ -163,10 +167,10 @@ export default function RoleCards() {
               </div>
 
               {/* Title */}
-              <h3 className="text-3xl sm:text-4xl lg:text-[42px] font-extrabold font-mono text-[#1f1a17] tracking-tight leading-[1.12]">
+              <h2 className="text-3xl sm:text-4xl lg:text-[42px] font-extrabold font-mono text-[#1f1a17] tracking-tight leading-[1.12]">
                 Create<br />
                 and Manage<span className="text-[#E86F47]">.</span>
-              </h3>
+              </h2>
 
               {/* CTA Button */}
               <Link
@@ -187,9 +191,12 @@ export default function RoleCards() {
 
             {/* Right Graphic: Create & Manage 3D Illustration */}
             <div className="relative shrink-0 flex items-center justify-center">
-              <img
+              <Image
                 src="/teacher-card-graphic.png"
-                alt="Create and Manage"
+                alt=""
+                width={210}
+                height={224}
+                sizes="(max-width: 640px) 208px, 288px"
                 className="w-52 sm:w-60 md:w-64 lg:w-72 h-auto object-contain select-none pointer-events-none transition-transform duration-500 group-hover:scale-105"
               />
             </div>

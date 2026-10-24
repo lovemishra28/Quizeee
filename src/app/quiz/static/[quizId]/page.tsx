@@ -1,12 +1,15 @@
 'use client';
 
-import { use, useEffect, useState } from 'react';
+import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
 import { Clock, BookOpen, Play } from 'lucide-react';
 import { submitStaticQuiz } from '@/actions/submitStaticQuiz';
 import DashboardBackground from '@/components/DashboardBackground';
+import type { Quiz, Question } from '@/lib/types';
+import { isRecord, isUuid, validateQuizQuestions } from '@/lib/quizValidation';
+import { quizProgressKey, readQuizProgress, saveQuizProgress, clearQuizProgress } from '@/lib/quizProgress';
 
 export default function StaticQuizPage({ params }: { params: Promise<{ quizId: string }> }) {
     const { quizId } = use(params);
@@ -16,8 +19,8 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
     const isReviewMode = searchParams.get('review') === '1';
 
     const [loading, setLoading] = useState(true);
-    const [quiz, setQuiz] = useState<any>(null);
-    const [questions, setQuestions] = useState<any[]>([]);
+    const [quiz, setQuiz] = useState<Quiz | null>(null);
+    const [questions, setQuestions] = useState<Question[]>([]);
     const [quizState, setQuizState] = useState<'intro' | 'active' | 'completed' | 'submitting'>('intro');
     const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
     const [answers, setAnswers] = useState<Record<string, number>>({});
@@ -26,38 +29,35 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
     const [finalScore, setFinalScore] = useState<number>(0);
     const [userRole, setUserRole] = useState<string>('');
     const [reviewSubmissions, setReviewSubmissions] = useState<Record<string, { selectedIndex: number; isCorrect: boolean }>>({});
-
-    // Timer Countdown Logic
-    useEffect(() => {
-        if (quizState !== 'active' || timeLeft <= 0) return;
-
-        const timer = setInterval(() => {
-            setTimeLeft((prev) => prev - 1);
-        }, 1000);
-
-        return () => clearInterval(timer);
-    }, [quizState, timeLeft]);
-
-    // Auto-submit when time runs out
-    useEffect(() => {
-        if (quizState === 'active' && timeLeft === 0) {
-            handleCompleteQuiz();
-        }
-    }, [timeLeft, quizState]);
+    const [endTime, setEndTime] = useState(0);
+    const [loadError, setLoadError] = useState('');
+    const [submitError, setSubmitError] = useState('');
+    const submittingRef = useRef(false);
 
     const handleStartQuiz = () => {
-        // Convert minutes to seconds
+        if (!quiz || !questions.length) return;
+        const now = Date.now();
+        if (quiz.available_until && now >= Date.parse(quiz.available_until)) { setSubmitError('This quiz has closed. Return to your dashboard.'); return; }
+        if (quiz.available_from && now < Date.parse(quiz.available_from)) { setSubmitError('This quiz has not opened yet.'); return; }
+        const end = now + (quiz.total_duration_minutes || 45) * 60_000;
+        setEndTime(end);
         setTimeLeft((quiz.total_duration_minutes || 45) * 60);
+        saveQuizProgress(quizProgressKey(userId, quizId, sessionId), { endTime: end, answers, questionIndex: currentQuestionIndex });
         setQuizState('active');
     };
 
-    const handleCompleteQuiz = async () => {
+    const handleCompleteQuiz = useCallback(async () => {
+        if (submittingRef.current || !quiz || !questions.length) return;
+        submittingRef.current = true;
+        setSubmitError('');
         setQuizState('submitting');
 
         try {
+            const { data: { session: authSession } } = await supabase.auth.getSession();
+            if (!authSession) throw new Error('Please sign in again before submitting.');
             const result = await submitStaticQuiz({
                 quizId,
-                userId,
+                accessToken: authSession.access_token,
                 answers,
                 sessionId,
             });
@@ -67,14 +67,32 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
             }
 
             setFinalScore(result.score ?? 0);
+            clearQuizProgress(quizProgressKey(userId, quizId, sessionId));
             setQuizState('completed');
 
-        } catch (error: any) {
-            console.error('Error submitting quiz:', error);
-            alert(`Failed to submit quiz: ${error.message || 'Please try again.'}`);
-            setQuizState('active'); // Revert so they can try clicking submit again
+        } catch (error) {
+            setSubmitError(error instanceof Error ? error.message : 'Failed to submit the quiz. Please try again.');
+            setQuizState('active');
+        } finally {
+            submittingRef.current = false;
         }
-    };
+    }, [quiz, questions.length, quizId, sessionId, answers, userId]);
+
+    useEffect(() => {
+        if (quizState !== 'active' || !endTime) return;
+        const timer = window.setInterval(() => setTimeLeft(Math.max(0, Math.ceil((endTime - Date.now()) / 1000))), 250);
+        return () => window.clearInterval(timer);
+    }, [quizState, endTime]);
+
+    useEffect(() => {
+        if (quizState !== 'active' || timeLeft !== 0 || submitError) return;
+        const timer = window.setTimeout(() => { void handleCompleteQuiz(); }, 0);
+        return () => window.clearTimeout(timer);
+    }, [quizState, timeLeft, submitError, handleCompleteQuiz]);
+
+    useEffect(() => {
+        if (quizState === 'active' && endTime && userId) saveQuizProgress(quizProgressKey(userId, quizId, sessionId), { endTime, answers, questionIndex: currentQuestionIndex });
+    }, [quizState, endTime, userId, quizId, sessionId, answers, currentQuestionIndex]);
 
     const formatTime = (seconds: number) => {
         const m = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -83,18 +101,23 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
     };
 
     useEffect(() => {
+        let cancelled = false;
         async function fetchQuizData() {
+            try {
+            if (!isUuid(quizId) || (sessionId && !isUuid(sessionId))) throw new Error('This quiz link is invalid.');
             const { data: { session } } = await supabase.auth.getSession();
+            if (cancelled) return;
             if (session) {
                 setUserId(session.user.id);
 
                 // Fetch user role
-                const { data: profile } = await supabase
+                const { data: profile, error: profileError } = await supabase
                     .from('profiles')
                     .select('role')
                     .eq('id', session.user.id)
                     .single();
                 
+                if (profileError || !profile) throw new Error('Unable to verify your profile. Please sign in again.');
                 if (profile) {
                     setUserRole(profile.role);
                 }
@@ -110,11 +133,7 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
                 .eq('id', quizId)
                 .single();
 
-            if (quizError || !quizData) {
-                alert('Quiz not found.');
-                router.push('/dashboard/student');
-                return;
-            }
+            if (quizError || !quizData || quizData.type !== 'static') throw new Error('This static quiz is unavailable.');
 
             const now = Date.now();
             const startsAt = quizData.available_from ? new Date(quizData.available_from).getTime() : null;
@@ -134,24 +153,25 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
                 .eq('quiz_id', quizId)
                 .order('order_index', { ascending: true });
 
-            if (questionsError) {
-                console.error(questionsError);
-            } else {
-                setQuestions(questionsData || []);
-            }
-
-            setQuiz(quizData);
+            if (questionsError || !questionsData?.length) throw new Error('This quiz has no questions ready to play.');
+            const normalized = validateQuizQuestions(questionsData.map(question => isRecord(question) ? { ...question, explanation: question.explanation ?? '', subtopic: question.subtopic ?? 'General' } : question));
+            const validQuestions = normalized.map((question, index) => ({ ...questionsData[index], ...question })) as Question[];
+            if (cancelled) return;
+            setQuestions(validQuestions);
+            setQuiz(quizData as Quiz);
 
             if (isReviewMode && session?.user) {
+                if (!sessionId) throw new Error('Select a completed attempt from your quiz history to review it.');
                 const { data: submissions, error: submissionsError } = await supabase
                     .from('submissions')
                     .select('question_id, selected_option_index, is_correct')
                     .eq('student_id', session.user.id)
+                    .eq('session_id', sessionId)
+                    .order('submitted_at', { ascending: true })
                     .in('question_id', (questionsData || []).map((question) => question.id));
 
-                if (submissionsError) {
-                    console.error('Failed to load quiz review', submissionsError);
-                } else {
+                if (submissionsError || !submissions?.length) throw new Error('No submitted attempt is available for this review.');
+                else {
                     setReviewSubmissions(Object.fromEntries(
                         (submissions || []).map((submission) => [
                             submission.question_id,
@@ -162,13 +182,21 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
                         ])
                     ));
                 }
+            } else if (session?.user) {
+                const progress = readQuizProgress(quizProgressKey(session.user.id, quizId, sessionId), validQuestions.map(question => question.id), quizData.total_duration_minutes || 45);
+                if (progress) {
+                    setAnswers(progress.answers); setCurrentQuestionIndex(progress.questionIndex); setEndTime(progress.endTime);
+                    setTimeLeft(Math.max(0, Math.ceil((progress.endTime - Date.now()) / 1000))); setQuizState('active');
+                }
             }
-
-            setLoading(false);
+            } catch (error) {
+                if (!cancelled) setLoadError(error instanceof Error ? error.message : 'Unable to load the quiz. Please try again.');
+            } finally { if (!cancelled) setLoading(false); }
         }
 
-        fetchQuizData();
-    }, [quizId, router, isReviewMode]);
+        void fetchQuizData();
+        return () => { cancelled = true; };
+    }, [quizId, router, isReviewMode, sessionId]);
 
     if (loading) {
         return (
@@ -181,6 +209,7 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
             </div>
         );
     }
+    if (loadError || !quiz || !questions.length) return <main id="main-content" className="min-h-screen bg-bg flex flex-col items-center justify-center p-6 font-mono text-center"><h1 className="text-3xl font-bold text-black mb-4">Quiz unavailable</h1><p role="alert" className="text-muted mb-6">{loadError || 'This quiz has no questions ready to play.'}</p><button onClick={() => router.push('/dashboard/student')} className="bg-brand text-black rounded-xl px-6 py-3">Return to Dashboard</button></main>;
 
     if (isReviewMode) {
         const correctCount = Object.values(reviewSubmissions).filter((submission) => submission.isCorrect).length;
@@ -188,7 +217,7 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
         return (
             <div className="min-h-screen bg-[#fff5f0] p-6 relative overflow-x-hidden">
                 <DashboardBackground />
-                <main className="relative z-10 max-w-4xl mx-auto mt-8">
+                <main id="main-content" className="relative z-10 max-w-4xl mx-auto mt-8">
                     <div className="flex flex-wrap items-center justify-between gap-4 mb-10">
                         <div>
                             <p className="text-brand font-black font-mono uppercase tracking-widest text-sm mb-1">Quiz review</p>
@@ -200,7 +229,7 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
                     </div>
 
                     <div className="space-y-6">
-                        {questions.map((question: any, questionIndex: number) => {
+                        {questions.map((question, questionIndex) => {
                             const submission = reviewSubmissions[question.id];
                             return (
                                 <section key={question.id} className="backdrop-blur-md bg-white/85 border-2 border-brand-light rounded-[2.5rem] p-8 sm:p-10 shadow-md">
@@ -251,7 +280,7 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
             return (
                 <div className="min-h-screen bg-[#fff5f0] flex items-center justify-center p-6 relative overflow-hidden">
                     <DashboardBackground />
-                    <div className="relative z-10 max-w-md w-full backdrop-blur-md bg-white/85 p-10 sm:p-12 rounded-[2.5rem] border-2 border-brand-light shadow-lg text-center">
+                    <main id="main-content" className="relative z-10 max-w-md w-full backdrop-blur-md bg-white/85 p-6 sm:p-12 rounded-[2.5rem] border-2 border-brand-light shadow-lg text-center">
                         <div className="inline-flex p-4 bg-brand-light text-brand rounded-2xl mb-6 border-2 border-brand-light">
                             <BookOpen className="w-10 h-10" />
                         </div>
@@ -263,7 +292,7 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
                         >
                             Return to Dashboard
                         </button>
-                    </div>
+                    </main>
                 </div>
             );
         }
@@ -271,7 +300,8 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
         return (
             <div className="min-h-screen bg-[#fff5f0] flex items-center justify-center p-6 relative overflow-hidden">
                 <DashboardBackground />
-                <div className="relative z-10 max-w-3xl w-full backdrop-blur-md bg-white/85 p-10 sm:p-14 rounded-[2.5rem] border-2 border-brand-light shadow-lg text-center">
+                <main id="main-content" className="relative z-10 max-w-3xl w-full backdrop-blur-md bg-white/85 p-6 sm:p-14 rounded-[2.5rem] border-2 border-brand-light shadow-lg text-center">
+                    {submitError && <p role="alert" className="mb-6 text-red-700">{submitError}</p>}
                     <div className="inline-flex p-4 bg-brand-light text-brand rounded-2xl mb-6 border-2 border-brand-light">
                         <BookOpen className="w-10 h-10" />
                     </div>
@@ -299,7 +329,7 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
                         <Play className="w-7 h-7 mr-3 fill-current" />
                         Begin Quiz
                     </button>
-                </div>
+                </main>
             </div>
         );
     }
@@ -312,12 +342,14 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
         return (
             <div className="min-h-screen bg-[#fff5f0] p-6 flex flex-col items-center relative overflow-x-hidden">
                 <DashboardBackground />
+                <main id="main-content" className="relative z-10 w-full max-w-4xl">
+                {submitError && <p role="alert" className="mb-6 p-4 rounded-xl bg-red-50 text-red-700">{submitError} <button onClick={() => { void handleCompleteQuiz(); }} className="underline font-bold">Retry submission</button></p>}
                 {/* Top Bar with Timer */}
                 <div className="relative z-10 w-full max-w-4xl backdrop-blur-md bg-white/85 p-5 sm:p-6 rounded-2xl shadow-md border-2 border-brand-light flex justify-between items-center mb-8">
                     <span className="font-bold font-mono text-xl text-black">
                         Question {currentQuestionIndex + 1} of {questions.length}
                     </span>
-                    <div className={`flex items-center font-black font-mono text-xl px-5 py-2.5 rounded-xl border-2 transition ${
+                    <div role="timer" aria-label={`${timeLeft} seconds remaining`} className={`flex items-center font-black font-mono text-xl px-5 py-2.5 rounded-xl border-2 transition ${
                         timeLeft < 300 ? 'bg-red-50 text-red-600 border-red-300' : 'bg-brand-light text-black border-brand-light'
                     }`}>
                         <Clock className="w-6 h-6 mr-2.5" />
@@ -327,9 +359,9 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
 
                 {/* Question Card */}
                 <div className="relative z-10 w-full max-w-4xl backdrop-blur-md bg-white/85 p-8 sm:p-12 rounded-[2.5rem] shadow-lg border-2 border-brand-light">
-                    <h2 className="text-2xl sm:text-3xl font-bold font-mono tracking-tight text-black mb-10 leading-snug">
+                    <h1 className="text-2xl sm:text-3xl font-bold font-mono tracking-tight text-black mb-10 leading-snug">
                         {currentQuestion.question_text}
-                    </h2>
+                    </h1>
 
                     <div className="space-y-4">
                         {currentQuestion.options.map((option: string, index: number) => {
@@ -338,6 +370,8 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
                                 <button
                                     key={index}
                                     onClick={() => setAnswers((prev) => ({ ...prev, [currentQuestion.id]: index }))}
+                                    aria-pressed={isSelected}
+                                    disabled={timeLeft === 0}
                                     className={`w-full text-left p-6 rounded-2xl border-2 font-mono text-xl transition-all shadow-sm flex items-center ${
                                         isSelected
                                             ? 'border-brand bg-brand text-black font-black shadow-md scale-[1.01]'
@@ -345,7 +379,7 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
                                     }`}
                                 >
                                     <span className={`inline-flex items-center justify-center w-11 h-11 rounded-full mr-4 border-2 shrink-0 ${
-                                        isSelected ? 'bg-black text-brand border-black font-black' : 'bg-brand-light text-black border-transparent font-bold'
+                                        isSelected ? 'bg-black text-white border-black font-black' : 'bg-brand-light text-black border-transparent font-bold'
                                     }`}>
                                         {String.fromCharCode(65 + index)}
                                     </span>
@@ -355,7 +389,6 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
                         })}
                     </div>
                 </div>
-
                 {/* Navigation Controls */}
                 <div className="relative z-10 w-full max-w-4xl flex justify-between mt-8">
                     <button
@@ -382,6 +415,7 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
                         </button>
                     )}
                 </div>
+                </main>
             </div>
         );
     }
@@ -404,11 +438,11 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
         return (
             <div className="min-h-screen bg-[#fff5f0] flex items-center justify-center p-6 relative overflow-hidden">
                 <DashboardBackground />
-                <div className="relative z-10 max-w-xl w-full backdrop-blur-md bg-white/85 p-10 sm:p-14 rounded-[2.5rem] border-2 border-brand-light shadow-lg text-center">
+                <main id="main-content" className="relative z-10 max-w-xl w-full backdrop-blur-md bg-white/85 p-6 sm:p-14 rounded-[2.5rem] border-2 border-brand-light shadow-lg text-center">
                     <div className="inline-flex p-5 bg-brand-light text-brand rounded-2xl mb-6 border-2 border-brand-light">
                         <BookOpen className="w-12 h-12" />
                     </div>
-                    <h2 className="text-4xl sm:text-5xl font-black font-mono tracking-tight text-black mb-3">Quiz Complete!</h2>
+                    <h1 className="text-4xl sm:text-5xl font-black font-mono tracking-tight text-black mb-3">Quiz Complete!</h1>
                     <p className="text-[#8c827a] font-mono text-lg font-bold mb-10">Your responses have been successfully recorded.</p>
 
                     <div className="bg-white/95 rounded-2xl p-8 mb-10 border-2 border-brand-light border-dashed shadow-sm">
@@ -424,7 +458,7 @@ export default function StaticQuizPage({ params }: { params: Promise<{ quizId: s
                     >
                         Return to Dashboard
                     </button>
-                </div>
+                </main>
             </div>
         );
     }

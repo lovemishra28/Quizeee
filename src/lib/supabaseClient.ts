@@ -46,6 +46,20 @@ const authStorage = {
 };
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+    global: {
+        fetch: async (input, init) => {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 15_000);
+            const cancel = () => controller.abort();
+            if (init?.signal?.aborted) cancel();
+            else init?.signal?.addEventListener('abort', cancel, { once: true });
+            try { return await fetch(input, { ...init, signal: controller.signal }); }
+            finally {
+                clearTimeout(timeout);
+                init?.signal?.removeEventListener('abort', cancel);
+            }
+        },
+    },
     auth: {
         storage: authStorage,
         persistSession: true,

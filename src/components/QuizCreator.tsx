@@ -4,6 +4,8 @@ import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { processStudyMaterial } from '@/actions/generateQuiz';
 import { UploadCloud, Loader2, CheckCircle, Trash2, Plus, Calendar, Clock } from 'lucide-react';
+import { MAX_QUESTIONS, MAX_UPLOAD_BYTES, validateQuizQuestions } from '@/lib/quizValidation';
+import type { QuizQuestionInput } from '@/lib/quizValidation';
 
 const formatForInput = (d: Date) => {
     const pad = (n: number) => n.toString().padStart(2, '0');
@@ -56,26 +58,23 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
     const [questionCount, setQuestionCount] = useState(5);
     const [type, setType] = useState('static');
     const [schedulePreset, setSchedulePreset] = useState<'today' | 'tomorrow' | 'custom'>('today');
-    const [availableFrom, setAvailableFrom] = useState('');
-    const [availableUntil, setAvailableUntil] = useState('');
+    const [initialSchedule] = useState(getTodayPreset);
+    const [availableFrom, setAvailableFrom] = useState(initialSchedule.from);
+    const [availableUntil, setAvailableUntil] = useState(initialSchedule.until);
     const [totalDurationMinutes, setTotalDurationMinutes] = useState<number>(45);
     const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState('');
-    const [generatedQuestions, setGeneratedQuestions] = useState<any[]>([]);
+    const [generatedQuestions, setGeneratedQuestions] = useState<QuizQuestionInput[]>([]);
     const [isReviewing, setIsReviewing] = useState(false);
+    const [saved, setSaved] = useState(false);
+    const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const fromInputRef = useRef<HTMLInputElement>(null);
     const untilInputRef = useRef<HTMLInputElement>(null);
 
-    // Auto-populate 'Today' preset when static mode is active and empty
     useEffect(() => {
-        if (type === 'static' && (!availableFrom || !availableUntil)) {
-            const { from, until } = getTodayPreset();
-            setAvailableFrom(from);
-            setAvailableUntil(until);
-            setSchedulePreset('today');
-        }
-    }, [type]);
+        return () => { if (resetTimerRef.current) clearTimeout(resetTimerRef.current); };
+    }, []);
 
     const applyPreset = (preset: 'today' | 'tomorrow') => {
         setSchedulePreset(preset);
@@ -94,8 +93,8 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
         try {
             const input = ref.current;
             if (input) {
-                if (typeof (input as any).showPicker === 'function') {
-                    (input as any).showPicker();
+                if (typeof input.showPicker === 'function') {
+                    input.showPicker();
                 } else {
                     input.focus();
                 }
@@ -107,17 +106,18 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
 
     const handleUpload = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!file || !title) return;
+        if (!file || !title.trim()) return;
         if (type === 'static' && (!availableFrom || !availableUntil)) {
-            setStatus('Set both the static quiz start and end times.');
+            setStatus('Error: Set both the static quiz start and end times.');
             return;
         }
         if (type === 'static' && new Date(availableUntil) <= new Date(availableFrom)) {
-            setStatus('The quiz end time must be after the start time.');
+            setStatus('Error: The quiz end time must be after the start time.');
             return;
         }
 
         setLoading(true);
+        setSaved(false);
         setStatus('Analyzing document and generating AI questions...');
 
         try {
@@ -128,9 +128,8 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
 
             const aiResponse = await processStudyMaterial(formData);
 
-            if (!aiResponse.success || !aiResponse.questions) {
-                throw new Error(aiResponse.error || 'Failed to generate questions');
-            }
+            if (!aiResponse.success) throw new Error(aiResponse.error);
+            if (!aiResponse.questions.length) throw new Error('Failed to generate questions.');
 
             // 2. Load the questions into state and switch to the review screen
             setGeneratedQuestions(aiResponse.questions);
@@ -141,9 +140,8 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                     : 'Questions generated successfully! Please review them.'
             );
 
-        } catch (error: any) {
-            console.error(error);
-            const msg = error.message || 'Failed to process document';
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : 'Failed to process document';
             if (msg.toLowerCase().includes('fetch')) {
                 setStatus('Error: Upload interrupted or server took too long. Please try again.');
             } else {
@@ -155,21 +153,15 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
     };
 
     const handleQuestionChange = (index: number, newText: string) => {
-        const updatedQuestions = [...generatedQuestions];
-        updatedQuestions[index].question_text = newText;
-        setGeneratedQuestions(updatedQuestions);
+        setGeneratedQuestions(previous => previous.map((question, questionIndex) => questionIndex === index ? { ...question, question_text: newText } : question));
     };
 
     const handleOptionChange = (questionIndex: number, optionIndex: number, newText: string) => {
-        const updatedQuestions = [...generatedQuestions];
-        updatedQuestions[questionIndex].options[optionIndex] = newText;
-        setGeneratedQuestions(updatedQuestions);
+        setGeneratedQuestions(previous => previous.map((question, index) => index === questionIndex ? { ...question, options: question.options.map((option, index) => index === optionIndex ? newText : option) } : question));
     };
 
     const handleCorrectAnswerChange = (questionIndex: number, correctIndex: number) => {
-        const updatedQuestions = [...generatedQuestions];
-        updatedQuestions[questionIndex].correct_option_index = correctIndex;
-        setGeneratedQuestions(updatedQuestions);
+        setGeneratedQuestions(previous => previous.map((question, index) => index === questionIndex ? { ...question, correct_option_index: correctIndex } : question));
     };
 
     const handleDeleteQuestion = (index: number) => {
@@ -179,6 +171,7 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
     };
 
     const handleAddQuestion = () => {
+        if (generatedQuestions.length >= MAX_QUESTIONS || loading || saved) return;
         setGeneratedQuestions([
             ...generatedQuestions,
             {
@@ -192,8 +185,19 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
     };
 
     const handleSaveQuiz = async () => {
+        if (loading || saved) return;
+        let reviewedQuestions: QuizQuestionInput[];
+        try {
+            reviewedQuestions = validateQuizQuestions(generatedQuestions);
+            if (!title.trim() || title.trim().length > 200) throw new Error('Enter a title of at most 200 characters.');
+            if (type === 'static' && (!availableFrom || !availableUntil || new Date(availableUntil) <= new Date(availableFrom))) throw new Error('Set a valid quiz availability window.');
+        } catch (error) {
+            setStatus(`Error: ${error instanceof Error ? error.message : 'Review the quiz before saving.'}`);
+            return;
+        }
         setLoading(true);
         setStatus('Saving quiz to database...');
+        let createdQuizId: string | undefined;
 
         try {
             // 1. Insert parent quiz record
@@ -201,7 +205,7 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                 .from('quizzes')
                 .insert({
                     teacher_id: teacherId,
-                    title: title,
+                    title: title.trim(),
                     type: type,
                     available_from: type === 'static' ? new Date(availableFrom).toISOString() : null,
                     available_until: type === 'static' ? new Date(availableUntil).toISOString() : null,
@@ -210,10 +214,11 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                 .select()
                 .single();
 
-            if (quizError) throw quizError;
+            if (quizError || !quizData) throw new Error('Unable to create the quiz. Please try again.');
+            createdQuizId = quizData.id;
 
             // 2. Attach quiz_id and order index to the reviewed questions
-            const questionsToInsert = generatedQuestions.map((q: any, index: number) => ({
+            const questionsToInsert = reviewedQuestions.map((q, index) => ({
                 quiz_id: quizData.id,
                 question_text: q.question_text,
                 options: q.options,
@@ -228,10 +233,11 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                 .from('questions')
                 .insert(questionsToInsert);
 
-            if (questionsError) throw questionsError;
+            if (questionsError) throw new Error('Unable to save the questions. Please try again.');
 
             setStatus('Quiz saved successfully!');
-            setTimeout(() => {
+            setSaved(true);
+            resetTimerRef.current = setTimeout(() => {
                 setStatus('');
                 setFile(null);
                 setTitle('');
@@ -242,11 +248,17 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                 setTotalDurationMinutes(45);
                 setGeneratedQuestions([]);
                 setIsReviewing(false);
+                setSaved(false);
                 if (onComplete) onComplete();
             }, 2000);
-        } catch (error: any) {
-            console.error(error);
-            setStatus(`Error: ${error.message}`);
+        } catch (error) {
+            let cleanupFailed = false;
+            if (createdQuizId) {
+                const { error: questionCleanup } = await supabase.from('questions').delete().eq('quiz_id', createdQuizId);
+                const { error: quizCleanup } = await supabase.from('quizzes').delete().eq('id', createdQuizId);
+                cleanupFailed = Boolean(questionCleanup || quizCleanup);
+            }
+            setStatus(cleanupFailed ? 'Error: The save was interrupted and cleanup could not be confirmed. Check your dashboard before retrying.' : `Error: ${error instanceof Error ? error.message : 'Unable to save this quiz.'}`);
         } finally {
             setLoading(false);
         }
@@ -254,17 +266,18 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
 
     if (isReviewing) {
         return (
-            <div className="bg-brand-lightest p-8 sm:p-10 rounded-[2rem] border-2 border-brand-light shadow-md max-h-[85vh] overflow-y-auto mb-12">
-                <div className="flex justify-between items-start mb-6">
+            <div className="bg-brand-lightest p-4 sm:p-10 rounded-[2rem] border-2 border-brand-light shadow-md max-h-[85vh] overflow-y-auto mb-12">
+                <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-6">
                     <div>
                         <p className="text-brand font-bold font-mono uppercase tracking-widest text-sm mb-1">Question Review</p>
-                        <h3 className="text-3xl sm:text-4xl font-black font-mono tracking-tight text-black">Review Generated Questions</h3>
+                        <h2 className="text-3xl sm:text-4xl font-black font-mono tracking-tight text-black">Review Generated Questions</h2>
                         <p className="text-[#8c827a] font-mono text-base mt-1">Make any necessary edits or adjustments before saving to the database.</p>
                     </div>
                     <span className="px-4 py-2 rounded-xl bg-white border-2 border-brand-light font-mono font-black text-black text-sm shadow-sm shrink-0">
                         {generatedQuestions.length} Questions
                     </span>
                 </div>
+                {status && <p role={status.startsWith('Error:') ? 'alert' : 'status'} className={`mb-6 rounded-xl p-4 font-mono text-sm ${status.startsWith('Error:') ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-800'}`}>{status}</p>}
 
                 <div className="space-y-6">
                     {generatedQuestions.map((q, qIndex) => (
@@ -275,12 +288,17 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                                     onClick={() => handleDeleteQuestion(qIndex)}
                                     className="text-red-500 hover:text-red-700 p-1.5 rounded-lg hover:bg-red-50 transition"
                                     title="Delete Question"
+                                    aria-label={`Delete question ${qIndex + 1}`}
+                                    disabled={loading || saved}
                                     type="button"
                                 >
                                     <Trash2 className="w-5 h-5" />
                                 </button>
                             </div>
                             <textarea
+                                aria-label={`Question ${qIndex + 1} text`}
+                                maxLength={2000}
+                                disabled={loading || saved}
                                 value={q.question_text}
                                 onChange={(e) => handleQuestionChange(qIndex, e.target.value)}
                                 className="w-full px-5 py-3 mb-4 border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none resize-none bg-white text-[#1c1917] font-mono font-bold text-lg leading-relaxed shadow-sm"
@@ -293,6 +311,8 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                                         <label className="flex items-center cursor-pointer">
                                             <input
                                                 type="radio"
+                                                aria-label={`Mark option ${String.fromCharCode(65 + oIndex)} correct for question ${qIndex + 1}`}
+                                                disabled={loading || saved}
                                                 name={`correct-${qIndex}`}
                                                 checked={q.correct_option_index === oIndex}
                                                 onChange={() => handleCorrectAnswerChange(qIndex, oIndex)}
@@ -305,6 +325,9 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                                             </span>
                                             <input
                                                 type="text"
+                                                aria-label={`Question ${qIndex + 1} option ${String.fromCharCode(65 + oIndex)}`}
+                                                maxLength={1000}
+                                                disabled={loading || saved}
                                                 value={option}
                                                 onChange={(e) => handleOptionChange(qIndex, oIndex, e.target.value)}
                                                 className="w-full outline-none bg-transparent text-[#1c1917] font-mono font-bold text-base"
@@ -320,6 +343,7 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                 <div className="mt-8 flex flex-col sm:flex-row gap-4 pt-4 border-t-2 border-brand-light/60">
                     <button
                         onClick={() => setIsReviewing(false)}
+                        disabled={loading || saved}
                         className="flex-1 py-4 bg-white border-2 border-brand-light text-black font-bold font-mono text-lg rounded-xl hover:bg-brand-lightest transition shadow-sm"
                         type="button"
                     >
@@ -327,6 +351,7 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                     </button>
                     <button
                         onClick={handleAddQuestion}
+                        disabled={loading || saved || generatedQuestions.length >= MAX_QUESTIONS}
                         className="flex-1 py-4 bg-brand-light text-black border-2 border-brand-light hover:border-brand font-bold font-mono text-lg rounded-xl transition flex items-center justify-center gap-2 shadow-sm"
                         type="button"
                     >
@@ -334,7 +359,7 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                     </button>
                     <button
                         onClick={handleSaveQuiz}
-                        disabled={loading}
+                        disabled={loading || saved || generatedQuestions.length === 0}
                         className="flex-1 py-4 bg-brand hover:bg-[#c47155] disabled:bg-brand-light text-black font-black font-mono text-xl rounded-xl transition shadow-sm"
                         type="button"
                     >
@@ -346,21 +371,23 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
     }
 
     return (
-        <div className="bg-brand-lightest p-8 rounded-[2rem] border border-brand-light shadow-sm mb-12">
+            <div className="bg-brand-lightest p-4 sm:p-8 rounded-[2rem] border border-brand-light shadow-sm mb-12">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
-                <h3 className="text-5xl sm:text-6xl font-bold font-mono tracking-tighter text-black">Create Quiz</h3>
-                <div className="flex gap-2">
+                <h2 className="text-4xl sm:text-6xl font-bold font-mono tracking-tighter text-black">Create Quiz</h2>
+                <div role="group" aria-label="Quiz mode" className="flex flex-wrap gap-2">
                     <button
                         type="button"
-                        onClick={() => setType('static')}
-                        className={`px-6 sm:px-8 py-2 sm:py-3 rounded-xl font-mono text-lg sm:text-xl font-bold border-2 transition ${type === 'static' ? 'bg-white border-brand-light text-black shadow-sm' : 'border-transparent text-gray-500 hover:text-black'}`}
+                        onClick={() => { setType('static'); if (schedulePreset === 'today') applyPreset('today'); }}
+                        aria-pressed={type === 'static'}
+                        className={`px-4 sm:px-8 py-2 sm:py-3 rounded-xl font-mono text-lg sm:text-xl font-bold border-2 transition ${type === 'static' ? 'bg-white border-brand-light text-black shadow-sm' : 'border-transparent text-gray-600 hover:text-black'}`}
                     >
                         Static
                     </button>
                     <button
                         type="button"
                         onClick={() => setType('competitive')}
-                        className={`px-6 sm:px-8 py-2 sm:py-3 rounded-xl font-mono text-lg sm:text-xl font-bold border-2 transition ${type === 'competitive' ? 'bg-brand border-brand text-black shadow-sm' : 'border-transparent text-gray-500 hover:text-black'}`}
+                        aria-pressed={type === 'competitive'}
+                        className={`px-4 sm:px-8 py-2 sm:py-3 rounded-xl font-mono text-lg sm:text-xl font-bold border-2 transition ${type === 'competitive' ? 'bg-brand border-brand text-black shadow-sm' : 'border-transparent text-gray-600 hover:text-black'}`}
                     >
                         Competitive
                     </button>
@@ -372,6 +399,8 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                     <div className="flex-1 flex flex-col justify-between gap-6">
                         <input
                             type="text"
+                            aria-label="Quiz title"
+                            maxLength={200}
                             required
                             value={title}
                             onChange={(e) => setTitle(e.target.value)}
@@ -380,6 +409,7 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                         />
                         <input
                             type="number"
+                            aria-label="Number of questions"
                             min="1"
                             max="20"
                             value={Number.isNaN(questionCount) ? '' : questionCount}
@@ -393,7 +423,12 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                     </div>
 
                     <div className="w-full sm:w-[350px]">
-                        <label className="flex flex-col items-center justify-center w-full h-full min-h-[160px] border-2 border-brand-light rounded-xl cursor-pointer bg-white hover:bg-gray-50 transition">
+                        <label onDragOver={event => event.preventDefault()} onDrop={event => {
+                            event.preventDefault();
+                            const dropped = event.dataTransfer.files[0];
+                            if (!dropped || !/\.pdf$/i.test(dropped.name) || dropped.size > MAX_UPLOAD_BYTES) { setStatus('Error: Upload a PDF of 10 MB or smaller.'); return; }
+                            setFile(dropped); setStatus('');
+                        }} className="flex flex-col items-center justify-center w-full h-full min-h-[160px] border-2 border-brand-light rounded-xl cursor-pointer bg-white hover:bg-gray-50 focus-within:ring-2 focus-within:ring-brand-ink transition">
                             <div className="flex flex-col items-center justify-center p-8">
                                 <UploadCloud className="w-10 h-10 text-black mb-4" />
                                 <p className="text-sm text-black text-center">
@@ -403,7 +438,8 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                             </div>
                             <input
                                 type="file"
-                                className="hidden"
+                                aria-label="Upload PDF study material"
+                                className="sr-only"
                                 accept="application/pdf"
                                 onChange={(e) => setFile(e.target.files?.[0] || null)}
                             />
@@ -424,10 +460,11 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                             </div>
 
                             {/* Quick Presets: Today, Tomorrow, Others */}
-                            <div className="inline-flex p-1.5 bg-[#fbf5f0] border-2 border-brand-light rounded-xl gap-1.5 self-start sm:self-auto">
+                            <div role="group" aria-label="Schedule presets" className="inline-flex flex-wrap p-1.5 bg-[#fbf5f0] border-2 border-brand-light rounded-xl gap-1.5 self-start sm:self-auto">
                                 <button
                                     type="button"
                                     onClick={() => applyPreset('today')}
+                                    aria-pressed={schedulePreset === 'today'}
                                     className={`px-4 py-1.5 rounded-lg font-mono text-sm font-bold transition flex items-center gap-1.5 ${schedulePreset === 'today'
                                             ? 'bg-brand text-black shadow-sm'
                                             : 'text-[#5c544e] hover:text-black hover:bg-white/60'
@@ -438,6 +475,7 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                                 <button
                                     type="button"
                                     onClick={() => applyPreset('tomorrow')}
+                                    aria-pressed={schedulePreset === 'tomorrow'}
                                     className={`px-4 py-1.5 rounded-lg font-mono text-sm font-bold transition flex items-center gap-1.5 ${schedulePreset === 'tomorrow'
                                             ? 'bg-brand text-black shadow-sm'
                                             : 'text-[#5c544e] hover:text-black hover:bg-white/60'
@@ -465,12 +503,13 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                         {/* Date & Time Pickers with Direct Calendar Popout */}
                         <div className="grid gap-4 sm:grid-cols-2">
                             <div>
-                                <label className="block text-sm font-mono font-bold text-[#1c1917] mb-1.5">
+                                <label htmlFor="quiz-available-from" className="block text-sm font-mono font-bold text-[#1c1917] mb-1.5">
                                     Available from
                                 </label>
                                 <div className="relative flex items-center">
                                     <input
                                         ref={fromInputRef}
+                                        id="quiz-available-from"
                                         type="datetime-local"
                                         required
                                         value={availableFrom}
@@ -479,11 +518,12 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                                             setSchedulePreset('custom');
                                         }}
                                         style={{ colorScheme: 'light' }}
-                                        className="w-full px-4 py-3 pr-24 border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none bg-white font-mono text-base font-bold text-[#1c1917] cursor-pointer [&::-webkit-calendar-picker-indicator]:hidden"
+                                        className="w-full min-w-0 max-w-full px-3 py-3 pr-20 border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none bg-white font-mono text-sm font-bold text-[#1c1917] cursor-pointer [&::-webkit-calendar-picker-indicator]:hidden"
                                     />
                                     <button
                                         type="button"
                                         onClick={() => openCalendar(fromInputRef)}
+                                        aria-label="Pick quiz start date"
                                         className="absolute right-2 px-2.5 py-1.5 rounded-lg bg-brand/15 hover:bg-brand text-black font-mono text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs"
                                         title="Open calendar picker"
                                     >
@@ -494,12 +534,13 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                             </div>
 
                             <div>
-                                <label className="block text-sm font-mono font-bold text-[#1c1917] mb-1.5">
+                                <label htmlFor="quiz-available-until" className="block text-sm font-mono font-bold text-[#1c1917] mb-1.5">
                                     Available until
                                 </label>
                                 <div className="relative flex items-center">
                                     <input
                                         ref={untilInputRef}
+                                        id="quiz-available-until"
                                         type="datetime-local"
                                         required
                                         value={availableUntil}
@@ -508,11 +549,12 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                                             setSchedulePreset('custom');
                                         }}
                                         style={{ colorScheme: 'light' }}
-                                        className="w-full px-4 py-3 pr-24 border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none bg-white font-mono text-base font-bold text-[#1c1917] cursor-pointer [&::-webkit-calendar-picker-indicator]:hidden"
+                                        className="w-full min-w-0 max-w-full px-3 py-3 pr-20 border-2 border-brand-light rounded-xl focus:ring-2 focus:ring-brand outline-none bg-white font-mono text-sm font-bold text-[#1c1917] cursor-pointer [&::-webkit-calendar-picker-indicator]:hidden"
                                     />
                                     <button
                                         type="button"
                                         onClick={() => openCalendar(untilInputRef)}
+                                        aria-label="Pick quiz end date"
                                         className="absolute right-2 px-2.5 py-1.5 rounded-lg bg-brand/15 hover:bg-brand text-black font-mono text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs"
                                         title="Open calendar picker"
                                     >
@@ -555,6 +597,7 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                                     <div className="flex items-center gap-1.5 ml-1">
                                         <input
                                             type="number"
+                                            aria-label="Quiz time limit in minutes"
                                             min="1"
                                             max="360"
                                             value={totalDurationMinutes || ''}
@@ -594,7 +637,7 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
                 )}
 
                 {status && (
-                    <div className={`p-4 rounded-xl text-sm flex items-center font-medium ${status.includes('Error') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>
+                    <div role={status.startsWith('Error:') ? 'alert' : 'status'} className={`p-4 rounded-xl text-sm flex items-center font-medium ${status.includes('Error') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>
                         {loading ? <Loader2 className="w-5 h-5 mr-3 animate-spin" /> : <CheckCircle className="w-5 h-5 mr-3" />}
                         {status}
                     </div>
@@ -602,7 +645,7 @@ export default function QuizCreator({ teacherId, onComplete }: { teacherId: stri
 
                 <button
                     type="submit"
-                    disabled={loading || !file || !title}
+                    disabled={loading || !file || !title.trim()}
                     className="w-full py-5 bg-brand hover:bg-[#c47155] disabled:bg-brand-light text-black font-mono text-3xl font-normal tracking-wide rounded-xl transition shadow-sm"
                 >
                     {loading ? 'Processing...' : 'Generate Quiz'}

@@ -1,3 +1,5 @@
+import { isRecord, isUuid } from './quizValidation';
+
 export interface CachedProfile {
     id: string;
     full_name: string;
@@ -71,7 +73,11 @@ export function getCachedProfileDirect(): CachedProfile | null {
             ? (localStorage.getItem('quizeee_user_profile') || sessionStorage.getItem('quizeee_user_profile'))
             : sessionStorage.getItem('quizeee_user_profile');
         if (stored) {
-            return JSON.parse(stored) as CachedProfile;
+            const profile: unknown = JSON.parse(stored);
+            if (isRecord(profile) && isUuid(profile.id) && typeof profile.full_name === 'string' && profile.full_name.length <= 1000 && (profile.role === 'teacher' || profile.role === 'student')) {
+                return { id: profile.id, full_name: profile.full_name, role: profile.role };
+            }
+            return null;
         }
     } catch {
         return null;
@@ -117,4 +123,3 @@ export function clearAllAuth(): void {
         }
     } catch {}
 }
-

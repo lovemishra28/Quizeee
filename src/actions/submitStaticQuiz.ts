@@ -1,109 +1,68 @@
 'use server';
 
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-
-// Admin client runs only on the server, safely bypassing RLS
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey, {
-    auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-    },
-});
+import { isRecord, isUuid } from '@/lib/quizValidation';
+import { ActionError, logActionError, publicActionError } from '@/lib/server/errors';
+import { getSupabaseAdmin, requireUser } from '@/lib/server/supabase';
+import { withSubmissionLock } from '@/lib/server/rateLimit';
 
 interface SubmitStaticQuizParams {
     quizId: string;
-    userId: string;
+    accessToken: string;
     answers: Record<string, number>;
     sessionId?: string;
 }
 
-export async function submitStaticQuiz({ quizId, userId, answers, sessionId }: SubmitStaticQuizParams) {
+export async function submitStaticQuiz(input: SubmitStaticQuizParams) {
     try {
-        if (!quizId || !userId) {
-            throw new Error('Missing required quiz or user information');
+        if (!isRecord(input) || !isUuid(input.quizId) || (input.sessionId !== undefined && !isUuid(input.sessionId)) || !isRecord(input.answers) || Object.keys(input.answers).length > 20) {
+            throw new ActionError('Invalid quiz submission. Please reopen the quiz and try again.');
         }
-
-        // 1. Fetch official questions from the database to securely grade on backend
-        const { data: questions, error: questionsError } = await supabaseAdmin
-            .from('questions')
-            .select('id, correct_option_index')
-            .eq('quiz_id', quizId)
-            .order('order_index', { ascending: true });
-
-        if (questionsError || !questions) {
-            throw new Error(questionsError?.message || 'Failed to fetch questions for grading');
+        const { user } = await requireUser(input.accessToken, 'student');
+        const admin = getSupabaseAdmin();
+        const { data: quiz, error: quizError } = await admin.from('quizzes')
+            .select('id, type, available_from, available_until').eq('id', input.quizId).single();
+        if (quizError || !quiz || quiz.type !== 'static') throw new ActionError('This static quiz is unavailable.', 'QUIZ_UNAVAILABLE');
+        const now = Date.now();
+        const startsAt = quiz.available_from ? Date.parse(quiz.available_from) : null;
+        const endsAt = quiz.available_until ? Date.parse(quiz.available_until) : null;
+        if ((startsAt !== null && (!Number.isFinite(startsAt) || now < startsAt)) || (endsAt !== null && (!Number.isFinite(endsAt) || now >= endsAt))) {
+            throw new ActionError('This quiz is outside its availability window.', 'QUIZ_CLOSED');
         }
+        let sessionQuery = admin.from('quiz_sessions').select('id, quiz_id, status').eq('quiz_id', input.quizId).in('status', ['waiting', 'active']);
+        if (input.sessionId) sessionQuery = sessionQuery.eq('id', input.sessionId);
+        const { data: sessions, error: sessionError } = await sessionQuery.order('created_at', { ascending: false }).limit(1);
+        const session = sessions?.[0];
+        if (sessionError || !session) throw new ActionError('The quiz session is unavailable. Rejoin using your teacher’s code.', 'SESSION_UNAVAILABLE');
 
-        // Reuse the teacher's access-code session when a static quiz was joined by code.
-        let sessionData;
-        if (sessionId) {
-            const { data, error } = await supabaseAdmin
-                .from('quiz_sessions')
-                .select('id, quiz_id')
-                .eq('id', sessionId)
-                .eq('quiz_id', quizId)
-                .single();
-            if (error || !data) throw new Error('Invalid static quiz session');
-            sessionData = data;
-        } else {
-            const { data, error } = await supabaseAdmin
-                .from('quiz_sessions')
-                .insert({
-                    quiz_id: quizId,
-                    status: 'completed',
-                    room_code: Math.floor(100000 + Math.random() * 900000).toString(),
-                })
-                .select()
-                .single();
-            sessionData = data;
-            if (error || !sessionData) {
-                throw new Error(error?.message || 'Failed to create quiz session');
+        return await withSubmissionLock(`${session.id}:${user.id}`, async () => {
+            const { data: existing, error: existingError } = await admin.from('submissions').select('id').eq('session_id', session.id).eq('student_id', user.id).limit(1);
+            if (existingError) throw new Error('Unable to verify attempt');
+            if (existing?.length) throw new ActionError('This attempt has already been submitted. View it in your quiz history.', 'ALREADY_SUBMITTED');
+
+            const { data: questions, error: questionsError } = await admin.from('questions')
+                .select('id, options, correct_option_index').eq('quiz_id', input.quizId).order('order_index', { ascending: true });
+            if (questionsError || !questions?.length || questions.length > 20 || questions.some(question => !Array.isArray(question.options) || question.options.length !== 4 || !Number.isInteger(question.correct_option_index) || question.correct_option_index < 0 || question.correct_option_index > 3)) {
+                throw new ActionError('This quiz is not ready for submission. Please contact your teacher.', 'INVALID_QUIZ');
             }
-        }
-
-        if (!sessionData) throw new Error('Failed to create quiz session');
-
-        // 3. Server-side grading of student answers
-        let correctCount = 0;
-        const submissionsToInsert = questions.map((q) => {
-            const selectedIndex = answers[q.id] ?? -1;
-            const isCorrect = selectedIndex === q.correct_option_index;
-
-            if (isCorrect) correctCount++;
-
-            return {
-                session_id: sessionData.id,
-                student_id: userId,
-                question_id: q.id,
-                selected_option_index: selectedIndex,
-                is_correct: isCorrect,
-                score_awarded: isCorrect ? 10 : 0,
-                response_time_ms: 0,
-            };
+            const validIds = new Set(questions.map(question => question.id));
+            for (const [questionId, selectedIndex] of Object.entries(input.answers)) {
+                if (!validIds.has(questionId) || typeof selectedIndex !== 'number' || !Number.isInteger(selectedIndex) || selectedIndex < 0 || selectedIndex > 3) {
+                    throw new ActionError('The submission contains an invalid answer. Please reopen the quiz.');
+                }
+            }
+            let correctCount = 0;
+            const submissions = questions.map(question => {
+                const selectedIndex = input.answers[question.id] ?? -1;
+                const isCorrect = selectedIndex === question.correct_option_index;
+                if (isCorrect) correctCount++;
+                return { session_id: session.id, student_id: user.id, question_id: question.id, selected_option_index: selectedIndex, is_correct: isCorrect, score_awarded: isCorrect ? 10 : 0, response_time_ms: 0 };
+            });
+            const { error: submissionError } = await admin.from('submissions').insert(submissions);
+            if (submissionError) throw new Error('Submission persistence failed');
+            return { success: true as const, score: correctCount, totalQuestions: questions.length, sessionId: session.id };
         });
-
-        // 4. Bulk insert submissions
-        const { error: subError } = await supabaseAdmin
-            .from('submissions')
-            .insert(submissionsToInsert);
-
-        if (subError) {
-            throw new Error(subError.message);
-        }
-
-        return {
-            success: true,
-            score: correctCount,
-            totalQuestions: questions.length,
-        };
-    } catch (error: any) {
-        console.error('Error submitting static quiz:', error);
-        return {
-            success: false,
-            error: error.message || 'Failed to submit quiz',
-        };
+    } catch (error) {
+        logActionError('static-submit', error);
+        return { success: false as const, error: publicActionError(error, 'Unable to record your answers. Please try again.') };
     }
 }
